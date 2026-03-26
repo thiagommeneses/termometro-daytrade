@@ -1,3 +1,24 @@
+###################################################################
+#  TERMOMETRO INSTITUCIONAL - MACRO + VWAP + 60M + VOLUME
+#  Desenvolvido por: Thiago Marques Meneses (GitHub: /thiagommeneses)
+#  Descrição: Este script é um termômetro institucional avançado que combina análise macroeconômica, VWAP, tendência de 60 minutos e fluxo de volume para fornecer sinais de compra e venda mais precisos. Ele coleta dados do MetaTrader 5, calcula indicadores e exibe um dashboard visual atualizado a cada 10 segundos.
+#  Requisitos: MetaTrader 5, pandas, sqlite3, Python 3.x
+#
+# # Funcionalidades: 
+# 1. Coleta de dados em tempo real do MT5 para WIN, VIX, DXY e S&P 500.
+# 2. Cálculo do VWAP diário para o WIN e análise de distância do preço atual.
+# 3. Análise de tendência de 60 minutos para WIN e S&P 500.
+# 4. Cálculo do Z-Score para os ativos e composição de um termômetro institucional.
+# 5. Lógica de sinal que combina todos os indicadores para confirmar ou bloquear operações.
+# 6. Armazenamento histórico dos dados e sinais em um banco de dados SQLite.
+# 
+# Motor Analítico:
+#   Direção (Termômetro Macro: SP500, DXY, VIX)
+#   Tendência Longa (Filtro 60M)
+#   Localização Institucional (VWAP)
+#   Verdade/Combustível (Volume)
+###################################################################
+
 import MetaTrader5 as mt5
 import pandas as pd
 import time
@@ -41,16 +62,18 @@ cursor.execute('''
 ''')
 conn.commit()
 
-# Tenta adicionar as novas colunas da VWAP caso elas não existam (Evolução do BD)
+# Evolução do Banco de Dados (Adiciona VWAP e Volume se não existirem)
 try:
     cursor.execute("ALTER TABLE historico_termometro ADD COLUMN vwap REAL")
     cursor.execute("ALTER TABLE historico_termometro ADD COLUMN dist_vwap_pts REAL")
+    cursor.execute("ALTER TABLE historico_termometro ADD COLUMN vol_atual REAL")
+    cursor.execute("ALTER TABLE historico_termometro ADD COLUMN vol_media REAL")
     conn.commit()
 except sqlite3.OperationalError:
-    pass # As colunas já existem, segue o jogo.
+    pass # Colunas já existem
 
 # =================================================================
-# FUNÇÕES DE APOIO ATUALIZADA (Agora puxa o Volume se necessário)
+# FUNÇÕES DE APOIO 
 # =================================================================
 def puxar_dados(ticker, caminho_exe, tf, num_barras, completo=False):
     if not mt5.initialize(path=caminho_exe):
@@ -66,7 +89,7 @@ def puxar_dados(ticker, caminho_exe, tf, num_barras, completo=False):
     df.set_index('time', inplace=True)
     
     if completo:
-        return df # Retorna OHLC e Volume
+        return df 
     else:
         return df[['close']].rename(columns={'close': ticker})
 
@@ -80,16 +103,13 @@ def limpar_tela():
 while True:
     limpar_tela()
     hora_atual = datetime.now().strftime("%H:%M:%S")
-    print(f"🔄 Calculando Z-Score, Tendência H1 e VWAP Diária... [{hora_atual}]")
+    print(f"🔄 Processando MACRO, VWAP, Tendência H1 e Volume... [{hora_atual}]")
 
-    # Extração 5 Minutos (Para o Z-Score)
-    # Puxamos 120 barras para garantir que temos o dia todo para a VWAP (10 horas de pregão)
     df_win_full = puxar_dados(ticker_win, caminho_genial, mt5.TIMEFRAME_M5, 120, completo=True)
     df_vix = puxar_dados(ticker_vix, caminho_zero, mt5.TIMEFRAME_M5, 120)
     df_dxy = puxar_dados(ticker_dxy, caminho_zero, mt5.TIMEFRAME_M5, 120)
     df_sp  = puxar_dados(ticker_sp, caminho_zero, mt5.TIMEFRAME_M5, 120)
 
-    # Extração 60 Minutos
     df_win_60m = puxar_dados(ticker_win, caminho_genial, mt5.TIMEFRAME_H1, 25)
     df_sp_60m  = puxar_dados(ticker_sp, caminho_zero, mt5.TIMEFRAME_H1, 25)
 
@@ -98,31 +118,29 @@ while True:
         time.sleep(10) 
         continue
 
-    # Isola apenas o fechamento do WIN para o cálculo do Z-Score
     df_win_close = df_win_full[['close']].rename(columns={'close': ticker_win})
 
     # =================================================================
-    # CÁLCULO DA GRAVIDADE INSTITUCIONAL (VWAP DIÁRIA)
+    # CÁLCULO DA GRAVIDADE (VWAP) E FLUXO (VOLUME)
     # =================================================================
-    # 1. Isola as datas para calcular a VWAP apenas com os dados de "HOJE"
     df_win_full['Date'] = df_win_full.index.date
-    
-    # 2. Preço Típico = (Máxima + Mínima + Fechamento) / 3
     df_win_full['Typical_Price'] = (df_win_full['high'] + df_win_full['low'] + df_win_full['close']) / 3
-    
-    # 3. Multiplica o Preço pelo Volume daquela barra de 5 minutos
     df_win_full['TP_Vol'] = df_win_full['Typical_Price'] * df_win_full['tick_volume']
     
-    # 4. Soma Cumulativa do dia
     df_win_full['Cum_TP_Vol'] = df_win_full.groupby('Date')['TP_Vol'].cumsum()
     df_win_full['Cum_Vol'] = df_win_full.groupby('Date')['tick_volume'].cumsum()
-    
-    # 5. A Fórmula final da VWAP
     df_win_full['VWAP'] = df_win_full['Cum_TP_Vol'] / df_win_full['Cum_Vol']
+
+    # Média de Volume (20 períodos)
+    df_win_full['Vol_SMA20'] = df_win_full['tick_volume'].rolling(window=20).mean()
 
     vwap_atual = df_win_full['VWAP'].iloc[-1]
     fechamento_win = df_win_full['close'].iloc[-1]
     distancia_vwap = fechamento_win - vwap_atual
+    
+    vol_atual = df_win_full['tick_volume'].iloc[-1]
+    vol_media = df_win_full['Vol_SMA20'].iloc[-1]
+    tem_volume = vol_atual > vol_media
 
     # =================================================================
     # CÁLCULO DA TENDÊNCIA 60M E Z-SCORE 5M
@@ -155,27 +173,33 @@ while True:
     z_win = linha_atual[f'Z_{ticker_win}']
 
     # =================================================================
-    # LÓGICA DO SINAL + VWAP + 60M
+    # LÓGICA DO SINAL + VWAP + 60M + VOLUME
     # =================================================================
-    alerta_vwap = ""
-    if abs(distancia_vwap) > 500:
-        alerta_vwap = f"{MAGENTA}(CUIDADO: Efeito Elástico! Preço esticado da VWAP){RESET}"
+    alerta_vwap = f"{MAGENTA}(Elástico Esticado){RESET}" if abs(distancia_vwap) > 500 else ""
 
     if term_valor >= 1.5:
         if tendencia_sp == "ALTA" and tendencia_win == "ALTA" and fechamento_win >= vwap_atual:
-            sinal_txt = f"{VERDE}██ COMPRA FORTE (Apoiada pelo 60M e VWAP) ██ {alerta_vwap}{RESET}"
-            sinal_db = "COMPRA CONFIRMADA"
+            if tem_volume:
+                sinal_txt = f"{VERDE}██ COMPRA INSTITUCIONAL CONFIRMADA (Macro + VWAP + Volume) ██ {alerta_vwap}{RESET}"
+                sinal_db = "COMPRA CONFIRMADA"
+            else:
+                sinal_txt = f"{AMARELO}⚠️ COMPRA BLOQUEADA (Falta Volume Financeiro para confirmar){RESET}"
+                sinal_db = "COMPRA BLOQUEADA_VOL"
         else:
             sinal_txt = f"{AMARELO}⚠️ COMPRA BLOQUEADA (Filtro 60M ou abaixo da VWAP Institucional){RESET}"
-            sinal_db = "COMPRA BLOQUEADA"
+            sinal_db = "COMPRA BLOQUEADA_H1_VWAP"
             
     elif term_valor <= -1.5:
         if tendencia_sp == "BAIXA" and tendencia_win == "BAIXA" and fechamento_win <= vwap_atual:
-            sinal_txt = f"{VERMELHO}██ VENDA FORTE (Apoiada pelo 60M e VWAP) ██ {alerta_vwap}{RESET}"
-            sinal_db = "VENDA CONFIRMADA"
+            if tem_volume:
+                sinal_txt = f"{VERMELHO}██ VENDA INSTITUCIONAL CONFIRMADA (Macro + VWAP + Volume) ██ {alerta_vwap}{RESET}"
+                sinal_db = "VENDA CONFIRMADA"
+            else:
+                sinal_txt = f"{AMARELO}⚠️ VENDA BLOQUEADA (Falta Volume Financeiro para confirmar){RESET}"
+                sinal_db = "VENDA BLOQUEADA_VOL"
         else:
             sinal_txt = f"{AMARELO}⚠️ VENDA BLOQUEADA (Filtro 60M ou acima da VWAP Institucional){RESET}"
-            sinal_db = "VENDA BLOQUEADA"
+            sinal_db = "VENDA BLOQUEADA_H1_VWAP"
             
     elif term_valor >= 0.5:
         sinal_txt = f"{VERDE}↗️ Viés de Alta Global{RESET}"
@@ -187,14 +211,16 @@ while True:
         sinal_txt = f"{RESET}⚪ NEUTRO (Sem direção clara){RESET}"
         sinal_db = "NEUTRO"
 
-    # Salvando no Banco de Dados
+    # =================================================================
+    # SALVANDO NO BD
+    # =================================================================
     try:
         cursor.execute('''
             INSERT OR REPLACE INTO historico_termometro 
-            (timestamp, win_close, z_win, z_sp500, z_dxy, z_vix, termometro_score, sinal, vwap, dist_vwap_pts)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (timestamp, win_close, z_win, z_sp500, z_dxy, z_vix, termometro_score, sinal, vwap, dist_vwap_pts, vol_atual, vol_media)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (timestamp_db, fechamento_win, z_win, linha_atual[f'Z_{ticker_sp}'], 
-              linha_atual[f'Z_{ticker_dxy}'], linha_atual[f'Z_{ticker_vix}'], term_valor, sinal_db, vwap_atual, distancia_vwap))
+              linha_atual[f'Z_{ticker_dxy}'], linha_atual[f'Z_{ticker_vix}'], term_valor, sinal_db, vwap_atual, distancia_vwap, vol_atual, vol_media))
         conn.commit()
     except Exception as e:
         print(f"Erro BD: {e}")
@@ -204,7 +230,7 @@ while True:
     # =================================================================
     limpar_tela()
     print("="*65)
-    print(f"   TERMÔMETRO QUANTITATIVO - MACRO + VWAP + 60M   ")
+    print(f"   TERMÔMETRO INSTITUCIONAL - MACRO + VWAP + 60M + VOLUME   ")
     print("="*65)
     print(f"Última Atualização: {hora_atual} | Ref. Candle: {fechamento_candle}\n")
     
@@ -212,6 +238,13 @@ while True:
     print(f"Pontuação Termômetro Global: {term_valor:.2f}")
     print("-" * 65)
     
+    print(f"📊 FLUXO DE VOLUME (No Candle de 5M Atual):")
+    cor_vol = VERDE if tem_volume else AMARELO
+    status_vol_txt = "ACIMA da Média (Confirmado)" if tem_volume else "ABAIXO da Média (Movimento Oco)"
+    print(f"   Status do Lote: {cor_vol}{status_vol_txt}{RESET}")
+    print(f"   Vol. Atual: {vol_atual:.0f} | Vol. Médio: {vol_media:.0f}")
+    print("-" * 65)
+
     print(f"🧲 GRAVIDADE INSTITUCIONAL (VWAP Diária):")
     status_vwap = f"{VERDE}Preço Acima (Comprados no Controle){RESET}" if distancia_vwap > 0 else f"{VERMELHO}Preço Abaixo (Vendidos no Controle){RESET}"
     print(f"   VWAP Atual   : {vwap_atual:.0f}")
