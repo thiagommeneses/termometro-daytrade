@@ -11,6 +11,7 @@
 # 4. Cálculo do Z-Score para os ativos e composição de um termômetro institucional.
 # 5. Lógica de sinal que combina todos os indicadores para confirmar ou bloquear operações.
 # 6. Armazenamento histórico dos dados e sinais em um banco de dados SQLite.
+# 7. Dashboard visual no terminal com interpretação do cenário atual e análise detalhada.
 # 
 # Motor Analítico:
 #   Direção (Termômetro Macro: SP500, DXY, VIX)
@@ -57,20 +58,14 @@ cursor.execute('''
         z_dxy REAL,
         z_vix REAL,
         termometro_score REAL,
-        sinal TEXT
+        sinal TEXT,
+        vwap REAL,
+        dist_vwap_pts REAL,
+        vol_atual REAL,
+        vol_media REAL
     )
 ''')
 conn.commit()
-
-# Evolução do Banco de Dados (Adiciona VWAP e Volume se não existirem)
-try:
-    cursor.execute("ALTER TABLE historico_termometro ADD COLUMN vwap REAL")
-    cursor.execute("ALTER TABLE historico_termometro ADD COLUMN dist_vwap_pts REAL")
-    cursor.execute("ALTER TABLE historico_termometro ADD COLUMN vol_atual REAL")
-    cursor.execute("ALTER TABLE historico_termometro ADD COLUMN vol_media REAL")
-    conn.commit()
-except sqlite3.OperationalError:
-    pass # Colunas já existem
 
 # =================================================================
 # FUNÇÕES DE APOIO 
@@ -103,7 +98,7 @@ def limpar_tela():
 while True:
     limpar_tela()
     hora_atual = datetime.now().strftime("%H:%M:%S")
-    print(f"🔄 Processando MACRO, VWAP, Tendência H1 e Volume... [{hora_atual}]")
+    print(f"🔄 Lendo o mercado e gerando análise do cenário... [{hora_atual}]")
 
     df_win_full = puxar_dados(ticker_win, caminho_genial, mt5.TIMEFRAME_M5, 120, completo=True)
     df_vix = puxar_dados(ticker_vix, caminho_zero, mt5.TIMEFRAME_M5, 120)
@@ -131,7 +126,6 @@ while True:
     df_win_full['Cum_Vol'] = df_win_full.groupby('Date')['tick_volume'].cumsum()
     df_win_full['VWAP'] = df_win_full['Cum_TP_Vol'] / df_win_full['Cum_Vol']
 
-    # Média de Volume (20 períodos)
     df_win_full['Vol_SMA20'] = df_win_full['tick_volume'].rolling(window=20).mean()
 
     vwap_atual = df_win_full['VWAP'].iloc[-1]
@@ -173,43 +167,72 @@ while True:
     z_win = linha_atual[f'Z_{ticker_win}']
 
     # =================================================================
-    # LÓGICA DO SINAL + VWAP + 60M + VOLUME
+    # LÓGICA DO SINAL + INTELIGÊNCIA DO ANALISTA (INTERPRETAÇÃO)
     # =================================================================
     alerta_vwap = f"{MAGENTA}(Elástico Esticado){RESET}" if abs(distancia_vwap) > 500 else ""
+    mensagem_interpretacao = ""
 
-    if term_valor >= 1.5:
-        if tendencia_sp == "ALTA" and tendencia_win == "ALTA" and fechamento_win >= vwap_atual:
-            if tem_volume:
-                sinal_txt = f"{VERDE}██ COMPRA INSTITUCIONAL CONFIRMADA (Macro + VWAP + Volume) ██ {alerta_vwap}{RESET}"
-                sinal_db = "COMPRA CONFIRMADA"
-            else:
-                sinal_txt = f"{AMARELO}⚠️ COMPRA BLOQUEADA (Falta Volume Financeiro para confirmar){RESET}"
-                sinal_db = "COMPRA BLOQUEADA_VOL"
+    # 1. Regra de Ouro: O Efeito Elástico tem prioridade no aviso
+    if abs(distancia_vwap) > 500:
+        sinal_txt = f"{AMARELO}⚠️ OPERAÇÃO BLOQUEADA (Preço muito esticado da VWAP){RESET}"
+        sinal_db = "BLOQUEIO_ELASTICO"
+        
+        if distancia_vwap > 0:
+            mensagem_interpretacao = "O mercado subiu demais e esticou da VWAP. Comprar agora é risco altíssimo de pegar o topo. A gravidade deve puxar o preço de volta. Aguarde um recuo."
         else:
-            sinal_txt = f"{AMARELO}⚠️ COMPRA BLOQUEADA (Filtro 60M ou abaixo da VWAP Institucional){RESET}"
-            sinal_db = "COMPRA BLOQUEADA_H1_VWAP"
-            
+            mensagem_interpretacao = "A tendência é de baixa, mas não venda agora no fundo. O preço caiu tanto que esticou da VWAP. A chance de um repique violento para cima é enorme."
+
+    # 2. Cenários de Sinal Forte (Acima de 1.5 ou Abaixo de -1.5)
+    elif term_valor >= 1.5:
+        if tendencia_sp == "ALTA" and tendencia_win == "ALTA" and fechamento_win >= vwap_atual and tem_volume:
+            sinal_txt = f"{VERDE}██ COMPRA CONFIRMADA ██{RESET}"
+            sinal_db = "COMPRA"
+            mensagem_interpretacao = "Cenário dos sonhos! O macro empurra, a maré de 60M apoia, estamos acima da VWAP e os tubarões estão colocando lote (volume alto). Siga o fluxo comprador!"
+        elif not tem_volume:
+            sinal_txt = f"{AMARELO}⚠️ COMPRA BLOQUEADA (Falta Volume){RESET}"
+            sinal_db = "BLOQUEIO_VOL"
+            mensagem_interpretacao = "O preço está subindo e o exterior apoia, mas cadê o dinheiro? O volume está abaixo da média. Cheira a falso rompimento (armadilha para pessoa física)."
+        elif fechamento_win < vwap_atual:
+            sinal_txt = f"{AMARELO}⚠️ COMPRA BLOQUEADA (VWAP){RESET}"
+            sinal_db = "BLOQUEIO_VWAP"
+            mensagem_interpretacao = "O exterior melhorou, mas internamente os institucionais ainda estão vendidos (preço abaixo da VWAP). Comprar agora é dar cabeçada no teto. Espere romper a VWAP."
+        else:
+            sinal_txt = f"{AMARELO}⚠️ COMPRA BLOQUEADA (60M){RESET}"
+            sinal_db = "BLOQUEIO_H1"
+            mensagem_interpretacao = "Isso parece um repique de alta dentro de uma maré de queda (60M caindo). Não seja herói comprando contra a tendência maior."
+
     elif term_valor <= -1.5:
-        if tendencia_sp == "BAIXA" and tendencia_win == "BAIXA" and fechamento_win <= vwap_atual:
-            if tem_volume:
-                sinal_txt = f"{VERMELHO}██ VENDA INSTITUCIONAL CONFIRMADA (Macro + VWAP + Volume) ██ {alerta_vwap}{RESET}"
-                sinal_db = "VENDA CONFIRMADA"
-            else:
-                sinal_txt = f"{AMARELO}⚠️ VENDA BLOQUEADA (Falta Volume Financeiro para confirmar){RESET}"
-                sinal_db = "VENDA BLOQUEADA_VOL"
+        if tendencia_sp == "BAIXA" and tendencia_win == "BAIXA" and fechamento_win <= vwap_atual and tem_volume:
+            sinal_txt = f"{VERMELHO}██ VENDA CONFIRMADA ██{RESET}"
+            sinal_db = "VENDA"
+            mensagem_interpretacao = "Cenário perfeito para venda! O mundo está caindo (S&P cai, DXY/VIX sobem), estamos abaixo da VWAP e o volume confirma o pânico. Venda a favor da gravidade."
+        elif not tem_volume:
+            sinal_txt = f"{AMARELO}⚠️ VENDA BLOQUEADA (Falta Volume){RESET}"
+            sinal_db = "BLOQUEIO_VOL"
+            mensagem_interpretacao = "O preço está caindo, mas sem volume expressivo bancando a queda. Pode ser apenas uma exaustão passageira. Cuidado para não vender o fundo do movimento."
+        elif fechamento_win > vwap_atual:
+            sinal_txt = f"{AMARELO}⚠️ VENDA BLOQUEADA (VWAP){RESET}"
+            sinal_db = "BLOQUEIO_VWAP"
+            mensagem_interpretacao = "O macro azedou, mas o preço médio dos grandes bancos (VWAP) está segurando a queda como um chão de concreto. Vender agora é perigoso. Fique de fora."
         else:
-            sinal_txt = f"{AMARELO}⚠️ VENDA BLOQUEADA (Filtro 60M ou acima da VWAP Institucional){RESET}"
-            sinal_db = "VENDA BLOQUEADA_H1_VWAP"
-            
-    elif term_valor >= 0.5:
-        sinal_txt = f"{VERDE}↗️ Viés de Alta Global{RESET}"
-        sinal_db = "ALTA"
-    elif term_valor <= -0.5:
-        sinal_txt = f"{VERMELHO}↘️ Viés de Baixa Global{RESET}"
-        sinal_db = "BAIXA"
+            sinal_txt = f"{AMARELO}⚠️ VENDA BLOQUEADA (60M){RESET}"
+            sinal_db = "BLOQUEIO_H1"
+            mensagem_interpretacao = "Isso é uma correção natural de baixa dentro de uma tendência forte de alta (60M subindo). Vender contra a maré agora é pedir para ser atropelado."
+
+    # 3. Cenários de Viés e Lateralidade (-1.5 a 1.5)
     else:
-        sinal_txt = f"{RESET}⚪ NEUTRO (Sem direção clara){RESET}"
-        sinal_db = "NEUTRO"
+        if term_valor >= 0.5:
+            sinal_txt = f"{VERDE}↗️ Viés de Alta Global{RESET}"
+            sinal_db = "ALTA"
+            mensagem_interpretacao = "Existe um viés leve de alta no exterior, mas não é forte o suficiente para uma entrada agressiva. O mercado está 'cozinhando em banho-maria'."
+        elif term_valor <= -0.5:
+            sinal_txt = f"{VERMELHO}↘️ Viés de Baixa Global{RESET}"
+            sinal_db = "BAIXA"
+            mensagem_interpretacao = "O exterior pesa levemente para baixo. O mercado pode ir caindo devagar, de escadinha. Momento de proteger o capital e evitar compras pesadas."
+        else:
+            sinal_txt = f"{RESET}⚪ NEUTRO (Sem direção clara){RESET}"
+            sinal_db = "NEUTRO"
+            mensagem_interpretacao = "Robôs globais desligados ou brigando sem direção. O mercado está lateral, caótico e perigoso para operar. Lembre-se: Ficar de fora também é operar!"
 
     # =================================================================
     # SALVANDO NO BD
@@ -257,6 +280,11 @@ while True:
     print(f"   Maré Local (WIN)  : {cor_win_60}{tendencia_win}{RESET}")
     print(f"   Maré Global (S&P) : {cor_sp_60}{tendencia_sp}{RESET}")
     print("-" * 65)
+    
+    # NOVA SEÇÃO: INTELIGÊNCIA DO ANALISTA
+    print(f"{AZUL}💡 ANÁLISE DO CENÁRIO:{RESET}")
+    print(f"   {mensagem_interpretacao}")
+    print("="*65)
     
     print("RAIO-X DOS ATIVOS (Z-Score no 5M):")
     print(f"🇧🇷 WIN  : {z_win:>5.2f} (Cot: {fechamento_win:.0f})")
