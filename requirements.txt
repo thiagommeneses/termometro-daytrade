@@ -1,0 +1,6 @@
+MetaTrader5
+pandas
+streamlit
+plotly
+#yfinance
+#numpy

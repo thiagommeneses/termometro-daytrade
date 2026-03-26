@@ -2,6 +2,7 @@
 # Aqui vive apenas o que toca no banco de dados. Se um dia migrarmos para o Postgres, só mexemos aqui.
 
 import sqlite3
+import pandas as pd
 
 def inicializar_banco(nome_arquivo='dados_mercado.db'):
     conn = sqlite3.connect(nome_arquivo)
@@ -45,3 +46,15 @@ def salvar_leitura(conn, dados):
         conn.commit()
     except Exception as e:
         print(f"Erro ao salvar no BD: {e}")
+        
+# --- NOVA FUNÇÃO PARA O GRÁFICO ---
+def obter_historico_hoje(conn):
+    """Busca as leituras do dia atual para desenhar o gráfico"""
+    query = '''
+        SELECT timestamp, win_close, vwap, termometro_score, sinal 
+        FROM historico_termometro 
+        WHERE date(timestamp) = date('now', 'localtime')
+        ORDER BY timestamp ASC
+    '''
+    # O Pandas já lê a query SQL e transforma a coluna timestamp em formato de data
+    return pd.read_sql_query(query, conn, parse_dates=['timestamp'])
