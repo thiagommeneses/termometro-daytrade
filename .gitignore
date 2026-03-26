@@ -1,8 +1,22 @@
+# Arquivos de ambiente virtual
+.env
 venv
 .venv
+
+# Arquivos de cache do Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Ambiente Python
 .Python
 env/
+
+# IDEs e editores
+.vscode/
+.idea/
+.cursor/
+
+# Sistema operacional
+.DS_Store
