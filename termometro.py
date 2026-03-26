@@ -2,6 +2,7 @@ import MetaTrader5 as mt5
 import pandas as pd
 import time
 import os
+import sqlite3
 from datetime import datetime
 
 # 1. Configurações de Diretórios e Tickers
@@ -11,7 +12,7 @@ caminho_zero = r"C:\Program Files\Zero Financial MT5 Terminal\terminal64.exe"
 ticker_win = "WINJ26" 
 ticker_vix = "VIX"    
 ticker_dxy = "USDX"   
-ticker_sp  = "US500"  # Adicionado o S&P 500 (Verifique o nome exato na Zero Markets)
+ticker_sp  = "US500"  
 
 timeframe = mt5.TIMEFRAME_M5
 barras = 100
@@ -22,6 +23,30 @@ VERMELHO = '\033[91m'
 AMARELO = '\033[93m'
 RESET = '\033[0m'
 
+# =================================================================
+# INICIALIZAÇÃO DO BANCO DE DADOS (SQLITE)
+# =================================================================
+conn = sqlite3.connect('dados_mercado.db')
+cursor = conn.cursor()
+
+# Cria a tabela estruturada (Pronta para migrar pro Postgres no futuro)
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS historico_termometro (
+        timestamp DATETIME PRIMARY KEY,
+        win_close REAL,
+        z_win REAL,
+        z_sp500 REAL,
+        z_dxy REAL,
+        z_vix REAL,
+        termometro_score REAL,
+        sinal TEXT
+    )
+''')
+conn.commit()
+
+# =================================================================
+# FUNÇÕES DE APOIO
+# =================================================================
 def puxar_dados(ticker, caminho_exe):
     if not mt5.initialize(path=caminho_exe):
         return None
@@ -37,7 +62,6 @@ def puxar_dados(ticker, caminho_exe):
     return df[['close']].rename(columns={'close': ticker})
 
 def limpar_tela():
-    # Limpa o terminal para criar o efeito de "Dashboard" fixo
     os.system('cls' if os.name == 'nt' else 'clear')
 
 # =================================================================
@@ -57,7 +81,7 @@ while True:
 
     if any(df is None for df in [df_win, df_vix, df_dxy, df_sp]):
         print(f"{VERMELHO}Erro de conexão ou Ticker não encontrado no MT5.{RESET}")
-        time.sleep(10) # Tenta de novo em 10 segundos
+        time.sleep(10) 
         continue
 
     # Cruzamento e Cálculo
@@ -78,24 +102,53 @@ while True:
         ((df_final[f'Z_{ticker_dxy}'] * -1) * 0.3)
     )
 
-    # Extrai a última linha (o momento exato de agora)
+    # Extrai a última linha
     linha_atual = df_final.iloc[-1]
     fechamento_candle = linha_atual.name.strftime("%H:%M")
+    timestamp_db = linha_atual.name.strftime("%Y-%m-%d %H:%M:00") # Formato SQL
     
     term_valor = linha_atual['Termometro']
     z_win = linha_atual[f'Z_{ticker_win}']
 
-    # Lógica Visual do Sinal
+    # Lógica do Sinal (Separando o visual do banco de dados)
     if term_valor >= 1.5:
         sinal_txt = f"{VERDE}██ COMPRA FORTE (Mercado Global Eufórico) ██{RESET}"
+        sinal_db = "COMPRA FORTE"
     elif term_valor <= -1.5:
         sinal_txt = f"{VERMELHO}██ VENDA FORTE (Mercado Global em Pânico) ██{RESET}"
+        sinal_db = "VENDA FORTE"
     elif term_valor >= 0.5:
         sinal_txt = f"{VERDE}↗️ Viés de Alta Global{RESET}"
+        sinal_db = "ALTA"
     elif term_valor <= -0.5:
         sinal_txt = f"{VERMELHO}↘️ Viés de Baixa Global{RESET}"
+        sinal_db = "BAIXA"
     else:
         sinal_txt = f"{AMARELO}⚪ NEUTRO (Sem direção clara){RESET}"
+        sinal_db = "NEUTRO"
+
+    # =================================================================
+    # SALVANDO NO BANCO DE DADOS
+    # =================================================================
+    try:
+        # Usa REPLACE para não duplicar caso o mesmo candle seja lido 2x
+        cursor.execute('''
+            INSERT OR REPLACE INTO historico_termometro 
+            (timestamp, win_close, z_win, z_sp500, z_dxy, z_vix, termometro_score, sinal)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            timestamp_db,
+            linha_atual[ticker_win],
+            z_win,
+            linha_atual[f'Z_{ticker_sp}'],
+            linha_atual[f'Z_{ticker_dxy}'],
+            linha_atual[f'Z_{ticker_vix}'],
+            term_valor,
+            sinal_db
+        ))
+        conn.commit()
+    except Exception as e:
+        print(f"Erro ao salvar no BD: {e}")
 
     # Impressão do Dashboard
     limpar_tela()
@@ -103,10 +156,8 @@ while True:
     print(f"   TERMÔMETRO MACRO QUANTITATIVO - 5 MINUTOS   ")
     print("="*60)
     print(f"Última Atualização: {hora_atual} | Ref. Candle: {fechamento_candle}\n")
-    
     print(f"► SINAL ATUAL: {sinal_txt}\n")
     print(f"Pontuação do Termômetro Global: {term_valor:.2f}")
-    
     print("-" * 60)
     print("RAIO-X DOS ATIVOS (Z-Score na Média de 20):")
     print(f"🇧🇷 Mini-índice (WIN) : {z_win:>5.2f} (Cotação: {linha_atual[ticker_win]:.0f})")
@@ -116,5 +167,4 @@ while True:
     print("="*60)
     print("Aguardando 60 segundos para próxima leitura...")
 
-    # Pausa de 60 segundos antes de puxar tudo de novo
     time.sleep(60)
