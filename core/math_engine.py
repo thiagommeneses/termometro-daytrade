@@ -3,6 +3,7 @@
 
 from datetime import datetime
 import pandas as pd
+import numpy as np
 
 def calcular_vwap_e_volume(df_full):
     df = df_full.copy()
@@ -97,3 +98,45 @@ def variacao_overnight(df_m5):
 
     variacao_pct = ((preco_atual - fechamento_d1) / fechamento_d1) * 100
     return variacao_pct
+
+def calcular_atr(df_m5, periodo=14):
+    """Calcula o Average True Range (Volatilidade/Respiração do Mercado) para o Stop Loss"""
+    df = df_m5.copy()
+    df['Prev_Close'] = df['close'].shift(1)
+    
+    # True Range é o maior valor entre 3 medidas de volatilidade
+    tr1 = df['high'] - df['low']
+    tr2 = (df['high'] - df['Prev_Close']).abs()
+    tr3 = (df['low'] - df['Prev_Close']).abs()
+    
+    df['TR'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    df['ATR'] = df['TR'].rolling(window=periodo).mean()
+    
+    return df['ATR'].iloc[-1]
+
+def calcular_poc_intradiario(df_m5):
+    """Aproximação do Point of Control (POC): Onde houve mais volume no dia"""
+    df = df_m5.copy()
+    hoje = datetime.now().date()
+    df_hoje = df[df.index.date == hoje].copy()
+    
+    if df_hoje.empty: 
+        return df['close'].iloc[-1]
+
+    # Agrupa os preços em "caixotes" de 50 pontos e soma o volume dentro deles
+    df_hoje['Price_Bin'] = (df_hoje['close'] / 50).round() * 50
+    poc_profile = df_hoje.groupby('Price_Bin')['tick_volume'].sum()
+    poc_price = poc_profile.idxmax()
+    
+    return poc_price
+
+def calcular_correlacao_sp(df_win, df_sp, periodo=20):
+    """Calcula a Correlação de Pearson entre o Brasil e o S&P 500"""
+    # Junta os dois DataFrames pela hora exata
+    df_merged = pd.concat([df_win['WINJ26'], df_sp['US500']], axis=1).dropna()
+    
+    if len(df_merged) < periodo: 
+        return 1.0 # Se não tiver dados suficientes, assume correlação positiva padrão
+        
+    corr = df_merged['WINJ26'].rolling(window=periodo).corr(df_merged['US500']).iloc[-1]
+    return corr

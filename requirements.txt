@@ -1,6 +1,8 @@
 MetaTrader5
 pandas
-streamlit
 plotly
+#streamlit
 #yfinance
-#numpy
+numpy
+requests
+python-dotenv

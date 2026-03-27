@@ -3,6 +3,7 @@
 
 import time
 import os
+import msvcrt  # Biblioteca nativa do Windows para capturar teclas
 import MetaTrader5 as mt5
 from datetime import datetime
 
@@ -10,7 +11,9 @@ from datetime import datetime
 from core.database import inicializar_banco, salvar_leitura
 from core.mt5_feed import puxar_dados, CAMINHO_GENIAL, CAMINHO_ZERO
 from core.math_engine import calcular_vwap_e_volume, calcular_zscore_e_termometro, calcular_tendencia_60m
-from strategies.analise_pregao import analisar_cenario
+from strategies.analise_pregao import analisar_cenario_avancado
+from core.math_engine import calcular_atr, calcular_poc_intradiario, calcular_correlacao_sp
+from core.macro_calendar import verificar_alerta_macro
 from core.logger import log
 
 # Configurações
@@ -24,6 +27,7 @@ VERDE = '\033[92m'
 VERMELHO = '\033[91m'
 AMARELO = '\033[93m'
 AZUL = '\033[96m'
+MAGENTA = '\033[95m'
 RESET = '\033[0m'
 
 def limpar_tela():
@@ -31,6 +35,11 @@ def limpar_tela():
 
 def main():
     conn = inicializar_banco()
+
+    log.info("=== SISTEMA QUANTITATIVO INICIADO ===")
+    # Memória Anti-Spam para o Telegram
+    ultimo_sinal_enviado = ""
+    ultimo_alerta_enviado = ""
     
     while True:
         limpar_tela()
@@ -54,21 +63,23 @@ def main():
             time.sleep(10) 
             continue
 
-        # 2. Motor Matemático (core/math_engine.py)
+        # 2. Motor Matemático Evoluído (core/math_engine.py)
         vwap_atual, vol_atual, vol_media = calcular_vwap_e_volume(df_win_full)
-        df_win_close = df_win_full[['close']].rename(columns={'close': TICKER_WIN})
-        
+        df_win_close = df_win_full[['close']].rename(columns={'close': TICKER_WIN})        
         df_final = calcular_zscore_e_termometro(df_win_close, df_vix, df_dxy, df_sp, TICKER_WIN, TICKER_SP, TICKER_DXY, TICKER_VIX)
         
-        # ESCUDO ANTI-CRASH: Se não houver barras suficientes sobrepostas, ele avisa e tenta de novo
         if df_final.empty:
-            print(f"{AMARELO}Sincronizando fuso horário e aguardando sobreposição de barras (B3 vs Global)...{RESET}")
-            log.warning("df_final vazio. Aguardando sobreposição de fuso horário da madrugada.") # LOG DE AVISO
+            print(f"{AMARELO}Aguardando sobreposição de fuso horário da madrugada...{RESET}")
             time.sleep(10)
             continue
             
         tendencia_win = calcular_tendencia_60m(df_win_60m, TICKER_WIN)
         tendencia_sp = calcular_tendencia_60m(df_sp_60m, TICKER_SP)
+        
+        # Novas Métricas Bloomberg
+        atr_atual = calcular_atr(df_win_full)
+        poc_atual = calcular_poc_intradiario(df_win_full)
+        correlacao_atual = calcular_correlacao_sp(df_win_close, df_sp)
 
         # Extração das variáveis atuais
         linha_atual = df_final.iloc[-1]
@@ -80,10 +91,37 @@ def main():
         z_win = linha_atual[f'Z_{TICKER_WIN}']
         timestamp_db = linha_atual.name.strftime("%Y-%m-%d %H:%M:00")
 
-        # 3. Estratégia e Decisão (strategies/analise_pregao.py)
-        sinal_txt, sinal_db, mensagem = analisar_cenario(
-            term_valor, tendencia_sp, tendencia_win, fechamento_win, vwap_atual, tem_volume, distancia_vwap
+        # Verifica se tem alguma bomba macroeconômica prestes a explodir
+        alerta_macro = verificar_alerta_macro(hora_atual)
+
+        # 3. Estratégia e Decisão (Evoluída com Calendário)
+        sinal_txt, sinal_db, mensagem = analisar_cenario_avancado(
+            term_valor, tendencia_sp, tendencia_win, fechamento_win, vwap_atual, 
+            tem_volume, distancia_vwap, poc_atual, atr_atual, correlacao_atual, alerta_macro
         )
+
+        # --- GATILHO DO TELEGRAM (ANTI-SPAM) ---
+        from core.telegram_notifier import notificar_telegram
+        
+        # 1. Notifica Alerta Macro (Apenas 1 vez por evento)
+        if alerta_macro and alerta_macro != ultimo_alerta_enviado:
+            notificar_telegram("ALERTA MACRO", sinal_db, alerta_macro, fechamento_win, term_valor, distancia_vwap, tem_volume, tendencia_win, atr_atual, poc_atual)
+            ultimo_alerta_enviado = alerta_macro
+            
+        # Limpa a memória se o evento macro já passou
+        if not alerta_macro:
+            ultimo_alerta_enviado = ""
+
+        # 2. Notifica Sinais Fortes Institucionais
+        sinais_alerta = ["COMPRA", "VENDA", "DESCOLAMENTO_MACRO"]
+        if sinal_db in sinais_alerta and sinal_db != ultimo_sinal_enviado:
+            notificar_telegram("SINAL", sinal_db, mensagem, fechamento_win, term_valor, distancia_vwap, tem_volume, tendencia_win, atr_atual, poc_atual)
+            ultimo_sinal_enviado = sinal_db
+            
+        # Libera a trava se o mercado voltou a ficar lateral/bloqueado
+        elif sinal_db not in sinais_alerta:
+            ultimo_sinal_enviado = sinal_db
+        # ---------------------------------------
 
         # LOG DA DECISÃO DO ALGORITMO
         log.info(f"WIN: {fechamento_win:.0f} | Termômetro: {term_valor:.2f} | Decisão: {sinal_db}")
@@ -127,6 +165,8 @@ def main():
         print(f"   Distância    : {distancia_vwap:+.0f} pontos -> {status_vwap}")
         print("-" * 65)
 
+        print(f"🎯 POC Atual: {poc_atual:.0f} | 📏 ATR (Volatilidade): {atr_atual:.0f} pts | 🔗 Corr(WINxSP): {correlacao_atual:.2f}")
+
         print(f"🌊 FILTRO MACRO (Tendência 60 Minutos):")
         print(f"   Maré Local (WIN)  : {cor_win_60}{tendencia_win}{RESET}")
         print(f"   Maré Global (S&P) : {cor_sp_60}{tendencia_sp}{RESET}")
@@ -142,9 +182,31 @@ def main():
         print(f"💵 DXY  : {linha_atual[f'Z_{TICKER_DXY}']:>5.2f}")
         print(f"😨 VIX  : {linha_atual[f'Z_{TICKER_VIX}']:>5.2f}")
         print("="*65)
-        print("Aguardando 10 segundos para próxima leitura...")
+        
+        print("Aguardando 10 segundos... (Pressione 'T' para enviar ao Telegram)")
 
-        time.sleep(10)
+        # =================================================================
+        # 6. Espera Inteligente (Hotkey Non-blocking)
+        # =================================================================
+        espera_segundos = 10
+        tempo_inicial = time.time()
+        
+        while time.time() - tempo_inicial < espera_segundos:
+            # Verifica se alguma tecla foi pressionada fisicamente no terminal
+            if msvcrt.kbhit():
+                tecla = msvcrt.getch().decode('utf-8', errors='ignore').lower()
+                
+                # Se a tecla for 't', aciona o Telegram imediatamente
+                if tecla == 't':
+                    print(f"\n{MAGENTA}🚀 [HOTKEY] Tecla 'T' acionada! Disparando envio manual...{RESET}")
+                    # Usa a função do telegram_notifier que já instanciamos antes
+                    notificar_telegram("VALIDAÇÃO MANUAL", sinal_db, mensagem, fechamento_win, term_valor, distancia_vwap, tem_volume, tendencia_win, atr_atual, poc_atual)
+                    
+                    # Limpa o buffer do teclado para não ler 't' duplicado e avisa na tela
+                    while msvcrt.kbhit(): msvcrt.getch()
+                    time.sleep(1) # Pausa rápida só para você conseguir ler o aviso na tela preta
+            
+            time.sleep(0.1) # Dorme 100ms a cada ciclo para não sobrecarregar a CPU
 
 if __name__ == "__main__":
     main()

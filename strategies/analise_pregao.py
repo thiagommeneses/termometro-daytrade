@@ -5,73 +5,90 @@
 VERDE = '\033[92m'
 VERMELHO = '\033[91m'
 AMARELO = '\033[93m'
+AZUL = '\033[96m'
 MAGENTA = '\033[95m'
 RESET = '\033[0m'
 
-def analisar_cenario(term_valor, tendencia_sp, tendencia_win, fechamento_win, vwap_atual, tem_volume, distancia_vwap):
+def analisar_cenario_avancado(term_valor, tendencia_sp, tendencia_win, fechamento_win, vwap_atual, tem_volume, distancia_vwap, poc_atual, atr_atual, correlacao, alerta_macro=None):
     sinal_txt = ""
     sinal_db = ""
     mensagem = ""
 
-    # 1. Regra de Ouro: Efeito Elástico
+    # Cálculos de Risco Baseados no ATR (Volatilidade Matemática)
+    # Stop Loss de 1.5x o ATR protege contra violinadas. Alvo de 2x ATR.
+    stop_loss = atr_atual * 1.5
+    alvo = atr_atual * 2.0
+    gestao_risco = f" | Stop Sugerido: {stop_loss:.0f} pts | Alvo: {alvo:.0f} pts"
+
+    # 1. Filtro de Anomalia (O Brasil descolou do mundo?)
+    if correlacao < 0:
+        sinal_txt = f"{MAGENTA}⚠️ ALERTA DE DESCOLAMENTO (Anomalia Local){RESET}"
+        sinal_db = "DESCOLAMENTO_MACRO"
+        mensagem = f"A correlação com o S&P 500 quebrou (Corr: {correlacao:.2f}). O WIN parou de seguir o mundo, possivelmente devido a fluxo ou notícias locais. O Termômetro Global perde a eficácia aqui."
+        return sinal_txt, sinal_db, mensagem
+
+    # 2. Regra de Ouro: Efeito Elástico e Atração do POC
     if abs(distancia_vwap) > 500:
-        sinal_txt = f"{AMARELO}⚠️ OPERAÇÃO BLOQUEADA (Preço muito esticado da VWAP){RESET}"
+        sinal_txt = f"{AMARELO}⚠️ OPERAÇÃO BLOQUEADA (Risco de Retorno à Média){RESET}"
         sinal_db = "BLOQUEIO_ELASTICO"
         if distancia_vwap > 0:
-            mensagem = "O mercado subiu demais e esticou da VWAP. Comprar agora é risco altíssimo de pegar o topo. A gravidade deve puxar o preço de volta."
+            mensagem = f"O mercado esticou demais para cima da VWAP. A região de maior volume do dia (POC) está lá em {poc_atual:.0f}. O risco de a gravidade puxar o preço de volta é imenso."
         else:
-            mensagem = "A tendência é de baixa, mas não venda agora no fundo. O preço caiu tanto que esticou da VWAP. A chance de um repique violento para cima é enorme."
+            mensagem = f"Não venda no fundo! Preço muito longe da VWAP. A chance de um repique violento buscando a POC ({poc_atual:.0f}) é altíssima."
 
-    # 2. Sinais Fortes
+    # 3. Sinais Institucionais Confirmados
     elif term_valor >= 1.5:
         if tendencia_sp == "ALTA" and tendencia_win == "ALTA" and fechamento_win >= vwap_atual and tem_volume:
-            sinal_txt = f"{VERDE}██ COMPRA CONFIRMADA ██{RESET}"
+            sinal_txt = f"{VERDE}██ COMPRA INSTITUCIONAL CONFIRMADA ██{RESET}"
             sinal_db = "COMPRA"
-            mensagem = "Cenário dos sonhos! O macro empurra, a maré de 60M apoia, estamos acima da VWAP e há volume. Siga o fluxo comprador!"
+            mensagem = f"Cenário Ouro: Macro empurrando, maré a favor, acima da VWAP com fluxo.{gestao_risco}"
         elif not tem_volume:
-            sinal_txt = f"{AMARELO}⚠️ COMPRA BLOQUEADA (Falta Volume){RESET}"
+            sinal_txt = f"{AMARELO}⚠️ COMPRA BLOQUEADA (Movimento Oco){RESET}"
             sinal_db = "BLOQUEIO_VOL"
-            mensagem = "O preço sobe e o exterior apoia, mas o volume está baixo. Cheira a falso rompimento (armadilha)."
-        elif fechamento_win < vwap_atual:
-            sinal_txt = f"{AMARELO}⚠️ COMPRA BLOQUEADA (VWAP){RESET}"
-            sinal_db = "BLOQUEIO_VWAP"
-            mensagem = "O exterior melhorou, mas internamente os institucionais ainda estão vendidos (abaixo da VWAP). Espere romper a VWAP."
+            mensagem = "Termômetro forte, mas os grandes players não estão comprando (falta volume). Cheira a armadilha."
         else:
-            sinal_txt = f"{AMARELO}⚠️ COMPRA BLOQUEADA (60M){RESET}"
-            sinal_db = "BLOQUEIO_H1"
-            mensagem = "Isso parece um repique de alta dentro de uma maré de queda (60M caindo). Não compre contra a tendência maior."
+            sinal_txt = f"{AMARELO}⚠️ COMPRA BLOQUEADA (Filtros Internos){RESET}"
+            sinal_db = "BLOQUEIO_FILTROS"
+            mensagem = "O exterior voa, mas o WIN não cruzou a VWAP ou a maré de 60M ainda é de baixa."
 
     elif term_valor <= -1.5:
         if tendencia_sp == "BAIXA" and tendencia_win == "BAIXA" and fechamento_win <= vwap_atual and tem_volume:
-            sinal_txt = f"{VERMELHO}██ VENDA CONFIRMADA ██{RESET}"
+            sinal_txt = f"{VERMELHO}██ VENDA INSTITUCIONAL CONFIRMADA ██{RESET}"
             sinal_db = "VENDA"
-            mensagem = "Cenário perfeito para venda! O mundo cai, estamos abaixo da VWAP e o volume confirma o pânico."
+            mensagem = f"Cenário Ouro: Mundo derretendo, perdemos a VWAP e o volume vendedor confirmou.{gestao_risco}"
         elif not tem_volume:
-            sinal_txt = f"{AMARELO}⚠️ VENDA BLOQUEADA (Falta Volume){RESET}"
+            sinal_txt = f"{AMARELO}⚠️ VENDA BLOQUEADA (Movimento Oco){RESET}"
             sinal_db = "BLOQUEIO_VOL"
-            mensagem = "Preço caindo sem volume expressivo. Pode ser exaustão. Cuidado para não vender o fundo."
-        elif fechamento_win > vwap_atual:
-            sinal_txt = f"{AMARELO}⚠️ VENDA BLOQUEADA (VWAP){RESET}"
-            sinal_db = "BLOQUEIO_VWAP"
-            mensagem = "O macro azedou, mas o preço médio (VWAP) está segurando a queda. Vender agora é perigoso."
+            mensagem = "O Termômetro despencou, mas a queda está sem fluxo financeiro pesado. Cuidado para não vender o fundo."
         else:
-            sinal_txt = f"{AMARELO}⚠️ VENDA BLOQUEADA (60M){RESET}"
-            sinal_db = "BLOQUEIO_H1"
-            mensagem = "Correção de baixa dentro de uma tendência de alta (60M subindo). Não venda contra a maré."
+            sinal_txt = f"{AMARELO}⚠️ VENDA BLOQUEADA (Filtros Internos){RESET}"
+            sinal_db = "BLOQUEIO_FILTROS"
+            mensagem = "O macro é de pânico, mas internamente o preço ainda está forte (acima da VWAP ou 60M alta)."
 
-    # 3. Lateralidade
+    # 4. Mercado de Lado (Caixote)
     else:
-        if term_valor >= 0.5:
-            sinal_txt = f"{VERDE}↗️ Viés de Alta Global{RESET}"
+        # Se o preço está muito perto da POC (Point of Control), o mercado está lateral e consolidado
+        dist_poc = abs(fechamento_win - poc_atual)
+        if dist_poc < 100:
+            sinal_txt = f"{AZUL}💤 MERCADO EM CAIXOTE (Preso na POC){RESET}"
+            sinal_db = "NEUTRO_CAIXOTE"
+            mensagem = f"Preço girando exatamente na zona de maior volume do dia (POC: {poc_atual:.0f}). Zona de briga de grandes lotes. Evite operar aqui no meio."
+        elif term_valor >= 0.5:
+            sinal_txt = f"{VERDE}↗️ Viés Leve de Alta{RESET}"
             sinal_db = "ALTA"
-            mensagem = "Viés leve de alta no exterior, mas não é forte o suficiente para uma entrada agressiva."
+            mensagem = "Exterior com leve apetite a risco. Aguarde alinhamento de VWAP e Fluxo para entrar."
         elif term_valor <= -0.5:
-            sinal_txt = f"{VERMELHO}↘️ Viés de Baixa Global{RESET}"
+            sinal_txt = f"{VERMELHO}↘️ Viés Leve de Baixa{RESET}"
             sinal_db = "BAIXA"
-            mensagem = "Exterior pesa para baixo. Momento de proteger o capital e evitar compras pesadas."
+            mensagem = "Pressão externa é vendedora, mas sem força institucional clara ainda."
         else:
-            sinal_txt = f"{RESET}⚪ NEUTRO (Sem direção clara){RESET}"
+            sinal_txt = f"{RESET}⚪ NEUTRO (Briga de Robôs){RESET}"
             sinal_db = "NEUTRO"
-            mensagem = "Robôs globais brigando sem direção. Mercado lateral e perigoso. Ficar de fora também é operar!"
+            mensagem = "Fatores globais e locais totalmente anulados. Ficar de fora preserva o seu capital."
+
+    # A MÁGICA ACONTECE AQUI: Injeção do Contexto Macro Histórico
+    # O sinal continua sendo de COMPRA/VENDA, mas a mensagem ganha o dossiê da notícia.
+    if alerta_macro:
+        mensagem = f"{MAGENTA}{alerta_macro}{RESET}\n   {AZUL}💡 Análise Técnica:{RESET} {mensagem}"
 
     return sinal_txt, sinal_db, mensagem
