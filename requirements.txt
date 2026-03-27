@@ -1,0 +1,8 @@
+MetaTrader5
+pandas
+plotly
+#streamlit
+#yfinance
+numpy
+requests
+python-dotenv
