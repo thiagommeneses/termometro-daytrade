@@ -52,7 +52,7 @@ def notificar_telegram(tipo_alerta, sinal_db, mensagem_bruta, preco, termometro,
         f"• <b>Volatilidade (ATR):</b> <code>{atr:.0f} pts</code>\n"
         f"• <b>Alvo POC:</b> <code>{poc:.0f}</code>\n"
         f"---------------------------\n"
-        f"💡 <b>VOZ DO QUANT:</b>\n{mensagem_limpa}"
+        f"💡 <b>VOZ SUPREMA:</b>\n{mensagem_limpa}"
     )
 
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
