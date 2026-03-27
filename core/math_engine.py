@@ -1,6 +1,7 @@
 # Cálculos puros (Z-Score, VWAP, Médias)
 # Apenas matemática bruta. Entra DataFrame, sai número.
 
+from datetime import datetime
 import pandas as pd
 
 def calcular_vwap_e_volume(df_full):
@@ -44,39 +45,55 @@ def calcular_tendencia_60m(df_60m, ticker):
 # (Mantenha as funções que já existem lá e adicione estas no final)
 
 def calcular_dados_d1(df_m5):
-    """Calcula o Fechamento e a VWAP exata do dia anterior (D-1)"""
+    """Calcula o Fechamento e a VWAP exata do dia anterior (D-1) à prova de leilão"""
     df = df_m5.copy()
     df['Date'] = df.index.date
     datas_unicas = df['Date'].unique()
 
-    if len(datas_unicas) < 2:
-        return None, None # Precisa de pelo menos 2 dias no DataFrame
+    if len(datas_unicas) == 0: return None, None
 
-    # Isola apenas os dados de D-1 (o penúltimo dia na lista de datas)
-    data_d1 = datas_unicas[-2]
+    hoje = datetime.now().date()
+    
+    # Inteligência de Calendário: Verifica se o mercado já abriu hoje
+    if datas_unicas[-1] == hoje:
+        # Já tem dados de hoje, então D-1 é o penúltimo
+        data_d1 = datas_unicas[-2] if len(datas_unicas) >= 2 else datas_unicas[-1]
+    else:
+        # Mercado B3 fechado (antes das 09h), a última data da base já é o D-1!
+        data_d1 = datas_unicas[-1]
+
     df_d1 = df[df['Date'] == data_d1].copy()
 
-    # VWAP do D-1 (Matemática pura)
     df_d1['Typical_Price'] = (df_d1['high'] + df_d1['low'] + df_d1['close']) / 3
     df_d1['TP_Vol'] = df_d1['Typical_Price'] * df_d1['tick_volume']
-    vwap_d1 = df_d1['TP_Vol'].sum() / df_d1['tick_volume'].sum()
+    
+    # Proteção contra divisão por zero
+    soma_vol = df_d1['tick_volume'].sum()
+    vwap_d1 = df_d1['TP_Vol'].sum() / soma_vol if soma_vol > 0 else df_d1['close'].iloc[-1]
 
     fechamento_d1 = df_d1['close'].iloc[-1]
 
     return fechamento_d1, vwap_d1
 
 def variacao_overnight(df_m5):
-    """Calcula a variação % do ativo em relação ao fechamento do dia anterior"""
+    """Calcula a variação % do ativo global na madrugada"""
     df = df_m5.copy()
     df['Date'] = df.index.date
     datas_unicas = df['Date'].unique()
     
-    if len(datas_unicas) < 2: 
-        return 0.0
+    if len(datas_unicas) < 2: return 0.0
 
-    data_d1 = datas_unicas[-2]
+    hoje = datetime.now().date()
+    
+    if datas_unicas[-1] == hoje:
+        data_d1 = datas_unicas[-2]
+    else:
+        data_d1 = datas_unicas[-1]
+
     fechamento_d1 = df[df['Date'] == data_d1]['close'].iloc[-1]
     preco_atual = df['close'].iloc[-1]
+
+    if fechamento_d1 == 0: return 0.0
 
     variacao_pct = ((preco_atual - fechamento_d1) / fechamento_d1) * 100
     return variacao_pct

@@ -11,6 +11,7 @@ from core.database import inicializar_banco, salvar_leitura
 from core.mt5_feed import puxar_dados, CAMINHO_GENIAL, CAMINHO_ZERO
 from core.math_engine import calcular_vwap_e_volume, calcular_zscore_e_termometro, calcular_tendencia_60m
 from strategies.analise_pregao import analisar_cenario
+from core.logger import log
 
 # Configurações
 TICKER_WIN = "WINJ26"
@@ -37,16 +38,19 @@ def main():
         print(f"🔄 Executando Motor Quantitativo Modular... [{hora_atual}]")
 
         # 1. Extração de Dados (core/mt5_feed.py)
-        df_win_full = puxar_dados(TICKER_WIN, CAMINHO_GENIAL, mt5.TIMEFRAME_M5, 120, completo=True)
-        df_vix = puxar_dados(TICKER_VIX, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 120)
-        df_dxy = puxar_dados(TICKER_DXY, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 120)
-        df_sp  = puxar_dados(TICKER_SP, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 120)
+        # Puxamos 600 barras para garantir o "overlap" entre a B3 de ontem e o Global de hoje
+        df_win_full = puxar_dados(TICKER_WIN, CAMINHO_GENIAL, mt5.TIMEFRAME_M5, 600, completo=True)
+        df_vix = puxar_dados(TICKER_VIX, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 600)
+        df_dxy = puxar_dados(TICKER_DXY, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 600)
+        df_sp  = puxar_dados(TICKER_SP, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 600)
         
-        df_win_60m = puxar_dados(TICKER_WIN, CAMINHO_GENIAL, mt5.TIMEFRAME_H1, 25)
-        df_sp_60m  = puxar_dados(TICKER_SP, CAMINHO_ZERO, mt5.TIMEFRAME_H1, 25)
+        df_win_60m = puxar_dados(TICKER_WIN, CAMINHO_GENIAL, mt5.TIMEFRAME_H1, 50)
+        df_sp_60m  = puxar_dados(TICKER_SP, CAMINHO_ZERO, mt5.TIMEFRAME_H1, 50)
 
         if any(df is None for df in [df_win_full, df_vix, df_dxy, df_sp, df_win_60m, df_sp_60m]):
+            mensagem_erro = "Erro de conexão MT5. Tentando novamente em 10s..."
             print(f"{VERMELHO}Erro de conexão MT5. Tentando novamente...{RESET}")
+            log.error("Falha de comunicação com MetaTrader 5 (Genial ou Zero Markets).") # LOG DE ERRO
             time.sleep(10) 
             continue
 
@@ -56,6 +60,13 @@ def main():
         
         df_final = calcular_zscore_e_termometro(df_win_close, df_vix, df_dxy, df_sp, TICKER_WIN, TICKER_SP, TICKER_DXY, TICKER_VIX)
         
+        # ESCUDO ANTI-CRASH: Se não houver barras suficientes sobrepostas, ele avisa e tenta de novo
+        if df_final.empty:
+            print(f"{AMARELO}Sincronizando fuso horário e aguardando sobreposição de barras (B3 vs Global)...{RESET}")
+            log.warning("df_final vazio. Aguardando sobreposição de fuso horário da madrugada.") # LOG DE AVISO
+            time.sleep(10)
+            continue
+            
         tendencia_win = calcular_tendencia_60m(df_win_60m, TICKER_WIN)
         tendencia_sp = calcular_tendencia_60m(df_sp_60m, TICKER_SP)
 
@@ -73,6 +84,9 @@ def main():
         sinal_txt, sinal_db, mensagem = analisar_cenario(
             term_valor, tendencia_sp, tendencia_win, fechamento_win, vwap_atual, tem_volume, distancia_vwap
         )
+
+        # LOG DA DECISÃO DO ALGORITMO
+        log.info(f"WIN: {fechamento_win:.0f} | Termômetro: {term_valor:.2f} | Decisão: {sinal_db}")
 
         # 4. Salvar no Banco (core/database.py)
         dados_bd = (
