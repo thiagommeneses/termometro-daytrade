@@ -35,11 +35,15 @@ def limpar_tela():
 
 def main():
     conn = inicializar_banco()
-
+    
     log.info("=== SISTEMA QUANTITATIVO INICIADO ===")
+    
     # Memória Anti-Spam para o Telegram
     ultimo_sinal_enviado = ""
     ultimo_alerta_enviado = ""
+    tempo_ultimo_sinal = 0  # NOVO: Cronômetro do sinal
+    # Se quiser que o Telegram fique mais "tagarela", é só mudar o COOLDOWN_MINUTOS = 5 para 3. Se quiser mais silêncio, mude para 10!
+    COOLDOWN_MINUTOS = 5    # NOVO: Tempo de silêncio (ajuste como quiser).
     
     while True:
         limpar_tela()
@@ -108,19 +112,21 @@ def main():
             notificar_telegram("ALERTA MACRO", sinal_db, alerta_macro, fechamento_win, term_valor, distancia_vwap, tem_volume, tendencia_win, atr_atual, poc_atual)
             ultimo_alerta_enviado = alerta_macro
             
-        # Limpa a memória se o evento macro já passou
         if not alerta_macro:
             ultimo_alerta_enviado = ""
 
-        # 2. Notifica Sinais Fortes Institucionais
+        # 2. Notifica Sinais Fortes Institucionais com Cooldown
         sinais_alerta = ["COMPRA", "VENDA", "DESCOLAMENTO_MACRO"]
-        if sinal_db in sinais_alerta and sinal_db != ultimo_sinal_enviado:
-            notificar_telegram("SINAL", sinal_db, mensagem, fechamento_win, term_valor, distancia_vwap, tem_volume, tendencia_win, atr_atual, poc_atual)
-            ultimo_sinal_enviado = sinal_db
+        agora = time.time()
+        
+        if sinal_db in sinais_alerta:
+            # Dispara se for um sinal INÉDITO/DIFERENTE, OU se já passou o tempo de silêncio
+            passou_cooldown = (agora - tempo_ultimo_sinal) > (COOLDOWN_MINUTOS * 60)
             
-        # Libera a trava se o mercado voltou a ficar lateral/bloqueado
-        elif sinal_db not in sinais_alerta:
-            ultimo_sinal_enviado = sinal_db
+            if sinal_db != ultimo_sinal_enviado or passou_cooldown:
+                notificar_telegram("SINAL", sinal_db, mensagem, fechamento_win, term_valor, distancia_vwap, tem_volume, tendencia_win, atr_atual, poc_atual)
+                ultimo_sinal_enviado = sinal_db
+                tempo_ultimo_sinal = agora
         # ---------------------------------------
 
         # LOG DA DECISÃO DO ALGORITMO
