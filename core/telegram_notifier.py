@@ -21,10 +21,12 @@ TITULOS_SINAIS = {
     "NEUTRO": "⚪ MERCADO NEUTRO (BRIGA DE ROBÔS)"
 }
 
+# Função para limpar códigos ANSI (cores e formatações) das mensagens antes de enviar para o Telegram, garantindo que o texto fique legível e sem caracteres estranhos. O Telegram não interpreta códigos ANSI, então é importante remover esses códigos para evitar mensagens confusas. Essa função utiliza uma expressão regular para identificar e eliminar os códigos ANSI presentes na mensagem bruta, resultando em um texto limpo e pronto para ser enviado ao Telegram.
 def limpar_ansi(texto):
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     return ansi_escape.sub('', texto)
 
+# Notificação principal para sinais e alertas, com foco em métricas de mercado e insights detalhados
 def notificar_telegram(tipo_alerta, sinal_db, mensagem_bruta, preco, termometro, dist_vwap, tem_volume, tendencia_60m, atr, poc):
     mensagem_limpa = limpar_ansi(mensagem_bruta)
     hora = datetime.now().strftime("%H:%M")
@@ -70,3 +72,35 @@ def notificar_telegram(tipo_alerta, sinal_db, mensagem_bruta, preco, termometro,
             log.error(f"Erro Telegram: {response.text}")
     except Exception as e:
         log.error(f"Falha de conexão com Telegram: {e}")
+        
+        
+# Notificação específica para ordens executadas, com foco na ação e detalhes da operação
+# Essa função é chamada após a execução bem-sucedida de uma ordem, para informar rapidamente sobre a operação realizada.
+
+def notificar_execucao(acao, simbolo, preco, lote, sl, tp, motivo="Alinhamento Institucional"):
+    """Envia notificação curta focada apenas na execução da ordem"""
+    hora = datetime.now().strftime("%H:%M:%S")
+    icone = "🟢" if acao == "COMPRA" else "🔴"
+    
+    texto_telegram = (
+        f"<b>{icone} ORDEM EXECUTADA (AUTO-TRADING)</b>\n"
+        f"🕒 <i>{hora}</i>\n\n"
+        f"• <b>Ativo:</b> {simbolo}\n"
+        f"• <b>Ação:</b> {acao} ({lote} lote)\n"
+        f"• <b>Preço:</b> <code>{preco:.0f}</code>\n"
+        f"• <b>Stop Loss:</b> <code>{sl:.0f}</code>\n"
+        f"• <b>Take Profit:</b> <code>{tp:.0f}</code>\n"
+        f"• <b>Motivo:</b> <i>{motivo}</i>"
+    )
+
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": texto_telegram,
+        "parse_mode": "HTML"
+    }
+    
+    try:
+        requests.post(url, json=payload, timeout=5)
+    except Exception as e:
+        log.error(f"Falha ao enviar notificação de execução: {e}")
