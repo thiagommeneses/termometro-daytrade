@@ -21,6 +21,7 @@ from core.math_engine import (
     calcular_correlacao_sp
 )
 from strategies.analise_pregao import analisar_cenario_avancado
+from strategies.microestrutura import cacador_de_absorcao
 from core.macro_calendar import verificar_alerta_macro
 from core.logger import log
 
@@ -75,12 +76,15 @@ def main():
         df_dxy = puxar_dados(TICKER_DXY, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 600)
         df_sp  = puxar_dados(TICKER_SP, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 600)
         
+        # NOVO: Puxa silenciosamente as últimas 15 velas de 1 minuto (M1)
+        df_win_m1 = puxar_dados(TICKER_WIN, CAMINHO_GENIAL, mt5.TIMEFRAME_M1, 15, completo=True)
+        
         # Puxamos a tendência da maré maior (Gráfico de 1 Hora)
         df_win_60m = puxar_dados(TICKER_WIN, CAMINHO_GENIAL, mt5.TIMEFRAME_H1, 50)
         df_sp_60m  = puxar_dados(TICKER_SP, CAMINHO_ZERO, mt5.TIMEFRAME_H1, 50)
 
         # Se falhar a internet ou o MT5 cair, ele avisa e tenta de novo sem quebrar
-        if any(df is None for df in [df_win_full, df_vix, df_dxy, df_sp, df_win_60m, df_sp_60m]):
+        if any(df is None for df in [df_win_full, df_vix, df_dxy, df_sp, df_win_60m, df_sp_60m, df_win_m1]):
             print(f"{VERMELHO}Erro de conexão MT5. Tentando novamente...{RESET}")
             log.error("Falha de comunicação com MetaTrader 5 (Genial ou Zero Markets).") 
             time.sleep(10) 
@@ -128,12 +132,35 @@ def main():
             tem_volume, distancia_vwap, poc_atual, atr_atual, correlacao_atual, alerta_macro
         )
 
+        # -----------------------------------------------------------------
+        # NOVO: FILTRO DE WARM-UP INSTITUCIONAL (AMACIAMENTO) E [MICROESTRUTURA]
+        # -----------------------------------------------------------------
+        agora_dt = datetime.now()
+        # Calcula quantos minutos se passaram desde a abertura (09:00)
+        minutos_desde_abertura = (agora_dt.hour * 60 + agora_dt.minute) - (9 * 60)
+        em_warmup = 0 <= minutos_desde_abertura < 15
+
+        if em_warmup and sinal_db in ["COMPRA", "VENDA"]:
+            # Antes de bloquear cega e puramente, consultamos o M1 (A Microestrutura)
+            absorveu, msg_microestrutura = cacador_de_absorcao(df_win_m1, sinal_db)
+            
+            if absorveu:
+                # O FURA-FILA: O M1 confirmou a intuição de tela (Craquezinho com Volume)
+                log.info(f"FURA-FILA WARM-UP ATIVADO: {msg_microestrutura}")
+                mensagem = f"Warm-up ignorado por gatilho de MICROESTRUTURA. {msg_microestrutura}"
+                sinal_txt = f"🔥 {sinal_db} (Antecipação Institucional M1)"
+                # O sinal_db continua como "COMPRA" ou "VENDA", permitindo que a ordem seja executada!
+            else:
+                # Se não tem absorção no M1, a regra do escudo prevalece. Bloqueia a tendência.
+                sinal_db = f"{sinal_db} BLOQUEADA"
+                mensagem = f"Warm-up de Abertura. A VWAP não ancorou. {msg_microestrutura}"
+                sinal_txt = f"⚠️ {sinal_db} (Aguardando Amaciamento)"
+        # -----------------------------------------------------------------
+
         # =================================================================
         # 4. GATILHOS DE COMUNICAÇÃO (TELEGRAM) E EXECUÇÃO (AUTO-TRADING)
         # =================================================================
         
-        # NOVO: Filtro de Horário do Pregão (08:55 às 18:00)
-        agora_dt = datetime.now()
         horario_abertura = agora_dt.replace(hour=8, minute=55, second=0, microsecond=0)
         horario_fechamento = agora_dt.replace(hour=18, minute=0, second=0, microsecond=0)
         dentro_do_pregao = horario_abertura <= agora_dt <= horario_fechamento
@@ -145,17 +172,17 @@ def main():
         if not alerta_macro:
             ultimo_alerta_enviado = ""
 
-        # B) Gatilho de Sinais Inteligente (A Máquina de Estados)
-        sinais_alerta = ["COMPRA", "VENDA", "DESCOLAMENTO_MACRO", "BLOQUEIO_ELASTICO"]
-        sinais_operacionais = ["COMPRA", "VENDA"] # Apenas estes podem repetir após o cooldown
+        # B) Gatilho de Sinais Inteligente (A Máquina de Estados Anti-Spam)
+        # Adicionamos TODAS as strings de bloqueio aqui para o robô silenciá-las
+        sinais_alerta = ["COMPRA", "VENDA", "DESCOLAMENTO_MACRO", "BLOQUEIO_ELASTICO", "COMPRA BLOQUEADA", "VENDA BLOQUEADA", "OPERAÇÃO BLOQUEADA"]
+        sinais_operacionais = ["COMPRA", "VENDA"] 
         agora = time.time()
         
         if sinal_db in sinais_alerta and dentro_do_pregao:
             mudou_status = (sinal_db != ultimo_sinal_enviado)
             passou_cooldown = (agora - tempo_ultimo_sinal) > (COOLDOWN_MINUTOS * 60)
             
-            # A Mágica do Silêncio: Notifica se for um cenário NOVO, 
-            # OU se for um alerta de Compra/Venda e o tempo de lembrete passou.
+            # Só avisa se for um Status NOVO ou se for um Sinal Operacional cujo Cooldown já expirou.
             deve_notificar = mudou_status or (sinal_db in sinais_operacionais and passou_cooldown)
             
             if deve_notificar:
@@ -164,22 +191,18 @@ def main():
                 ultimo_sinal_enviado = sinal_db
                 tempo_ultimo_sinal = agora
 
-                # 2. EXECUÇÃO AUTOMÁTICA (Apenas se for Compra/Venda e Trava estiver ON)
+                # 2. EXECUÇÃO AUTOMÁTICA (Apenas se for Compra/Venda limpa)
                 if auto_trading_ativo and sinal_db in sinais_operacionais:
-                    # Verifica se já não existe uma posição aberta (Magic Number 777)
                     posicoes_abertas = mt5.positions_get(magic=777)
                     if posicoes_abertas is None or len(posicoes_abertas) == 0:
                         log.info(f"Auto-Trading acionado. Iniciando protocolo de {sinal_db}.")
                         
-                        # Gestão de Risco Quantitativa baseada no ATR
                         stop_pts = atr_atual
                         alvo_pts = atr_atual * 1.5
                         lote_operacional = 1.0 
                         
-                        # Manda o clique para a boleta do MT5
                         resultado_ordem = executar_ordem(TICKER_WIN, sinal_db, lote_operacional, fechamento_win, stop_pts, alvo_pts)
                         
-                        # Se deu sucesso, manda um Telegram curto
                         if resultado_ordem:
                             notificar_execucao(
                                 acao=sinal_db, 
