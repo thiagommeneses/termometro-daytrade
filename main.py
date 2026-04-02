@@ -21,13 +21,13 @@ from core.math_engine import (
     calcular_correlacao_sp
 )
 from strategies.analise_pregao import analisar_cenario_avancado
-from strategies.microestrutura import cacador_de_absorcao
+from strategies.microestrutura import analisar_fluxo_m1
 from core.macro_calendar import verificar_alerta_macro
 from core.logger import log
 
 # Ferramentas de Comunicação e Execução
 from core.telegram_notifier import notificar_telegram, notificar_execucao
-from core.mt5_executor import executar_ordem
+from core.mt5_executor import executar_ordem, zerar_posicoes
 
 # Configurações de Ativos
 TICKER_WIN = "WINJ26"
@@ -133,47 +133,85 @@ def main():
         )
 
         # -----------------------------------------------------------------
-        # NOVO: FILTRO DE WARM-UP INSTITUCIONAL (AMACIAMENTO) E [MICROESTRUTURA]
+        # NOVO: FILTRO DE EXPEDIENTE, WARM-UP E MICROESTRUTURA (FOOTPRINT)
         # -----------------------------------------------------------------
         agora_dt = datetime.now()
-        # Calcula quantos minutos se passaram desde a abertura (09:00)
         minutos_desde_abertura = (agora_dt.hour * 60 + agora_dt.minute) - (9 * 60)
         em_warmup = 0 <= minutos_desde_abertura < 15
 
-        if em_warmup and sinal_db in ["COMPRA", "VENDA"]:
-            # Antes de bloquear cega e puramente, consultamos o M1 (A Microestrutura)
-            absorveu, msg_microestrutura = cacador_de_absorcao(df_win_m1, sinal_db)
-            
-            if absorveu:
-                # O FURA-FILA: O M1 confirmou a intuição de tela (Craquezinho com Volume)
-                log.info(f"FURA-FILA WARM-UP ATIVADO: {msg_microestrutura}")
-                mensagem = f"Warm-up ignorado por gatilho de MICROESTRUTURA. {msg_microestrutura}"
-                sinal_txt = f"🔥 {sinal_db} (Antecipação Institucional M1)"
-                # O sinal_db continua como "COMPRA" ou "VENDA", permitindo que a ordem seja executada!
-            else:
-                # Se não tem absorção no M1, a regra do escudo prevalece. Bloqueia a tendência.
+        # HORÁRIO DE CORTE (Parametrizável: 16h45)
+        horario_corte = agora_dt.replace(hour=16, minute=45, second=0, microsecond=0)
+        pode_abrir_ordem = agora_dt <= horario_corte
+
+        # O Cão de Guarda: Se o 5M deu sinal, SEMPRE consultamos a fita do M1
+        if sinal_db in ["COMPRA", "VENDA"]:
+            if not pode_abrir_ordem:
+                # Trava de Fim de Expediente
                 sinal_db = f"{sinal_db} BLOQUEADA"
-                mensagem = f"Warm-up de Abertura. A VWAP não ancorou. {msg_microestrutura}"
-                sinal_txt = f"⚠️ {sinal_db} (Aguardando Amaciamento)"
+                mensagem = f"Horário limite atingido ({horario_corte.strftime('%H:%M')}). Novas operações bloqueadas para evitar falta de liquidez."
+                sinal_txt = f"⏳ {sinal_db} (Fim de Expediente)"
+            else:
+                # O Expediente está rolando. Aciona a leitura de Tick a Tick.
+                fluxo_aprovado, msg_microestrutura = analisar_fluxo_m1(TICKER_WIN, df_win_m1, sinal_db)
+                
+                # Cenas do 1º Tempo (09:00 as 09:15) - Abertura Caótica
+                if em_warmup:
+                    if fluxo_aprovado and "FURA-FILA" in msg_microestrutura:
+                        log.info(f"FURA-FILA WARM-UP ATIVADO: {msg_microestrutura}")
+                        mensagem = f"Warm-up ignorado por gatilho de MICROESTRUTURA. {msg_microestrutura}"
+                        sinal_txt = f"🔥 {sinal_db} (Antecipação Institucional M1)"
+                    else:
+                        sinal_db = f"{sinal_db} BLOQUEADA"
+                        mensagem = f"Warm-up de Abertura. A VWAP não ancorou. {msg_microestrutura}"
+                        sinal_txt = f"⚠️ {sinal_db} (Aguardando Amaciamento)"
+                
+                # Cenas do 2º Tempo (09:15 até 16:45) - Pregão Contínuo
+                else:
+                    if fluxo_aprovado == False and "BLOQUEIO" in msg_microestrutura:
+                        # O 5M achou lindo, mas a fita desmentiu (Agressão Oca)
+                        sinal_db = f"{sinal_db} BLOQUEADA"
+                        mensagem = f"Falso Rompimento Detectado pela Fita! {msg_microestrutura}"
+                        sinal_txt = f"🛑 {sinal_db} (Sem Saldo Delta)"
+                        log.warning(mensagem)
+                    elif fluxo_aprovado and "FURA-FILA" in msg_microestrutura:
+                        # O 5M e a Fita estão perfeitamente alinhados
+                        mensagem += f" | Crivo do Fluxo: {msg_microestrutura}"
+                        sinal_txt = f"🎯 {sinal_db} (Confirmação M1)"
         # -----------------------------------------------------------------
 
         # =================================================================
-        # 4. GATILHOS DE COMUNICAÇÃO (TELEGRAM) E EXECUÇÃO (AUTO-TRADING)
+        # 4. GATILHOS DE COMUNICAÇÃO, EXECUÇÃO E ZERAGEM COMPULSÓRIA
         # =================================================================
         
         horario_abertura = agora_dt.replace(hour=8, minute=55, second=0, microsecond=0)
         horario_fechamento = agora_dt.replace(hour=18, minute=0, second=0, microsecond=0)
         dentro_do_pregao = horario_abertura <= agora_dt <= horario_fechamento
 
-        # A) Notifica Alerta Macro (Apenas 1 vez por evento)
+        # A) ROTINA DE LIQUIDAÇÃO FORÇADA (SEGURANÇA DE CAPITAL - 16:55)
+        horario_zeragem = agora_dt.replace(hour=16, minute=55, second=0, microsecond=0)
+        if agora_dt >= horario_zeragem and dentro_do_pregao:
+            if auto_trading_ativo:
+                posicoes_abertas = mt5.positions_get(symbol=TICKER_WIN)
+                if posicoes_abertas and len(posicoes_abertas) > 0:
+                    msg_alerta = "⏰ 16:55 - Acionando Protocolo de Zeragem Forçada para proteger o capital de Gaps noturnos."
+                    log.warning(msg_alerta)
+                    notificar_telegram("ALERTA CRÍTICO", "ZERAGEM COMPULSÓRIA", msg_alerta, fechamento_win, term_valor, distancia_vwap, tem_volume, tendencia_win, atr_atual, poc_atual)
+                    
+                    # Executa a limpeza do book
+                    sucesso, msg = zerar_posicoes(TICKER_WIN)
+                    
+                    # Desliga o robô instantaneamente para impedir reentradas nos 5 minutos finais
+                    auto_trading_ativo = False
+                    log.info("Auto-Trading DESLIGADO automaticamente após a zeragem.")
+
+        # B) Notifica Alerta Macro (Apenas 1 vez por evento)
         if alerta_macro and alerta_macro != ultimo_alerta_enviado and dentro_do_pregao:
             notificar_telegram("ALERTA MACRO", sinal_db, alerta_macro, fechamento_win, term_valor, distancia_vwap, tem_volume, tendencia_win, atr_atual, poc_atual)
             ultimo_alerta_enviado = alerta_macro
         if not alerta_macro:
             ultimo_alerta_enviado = ""
 
-        # B) Gatilho de Sinais Inteligente (A Máquina de Estados Anti-Spam)
-        # Adicionamos TODAS as strings de bloqueio aqui para o robô silenciá-las
+        # C) Gatilho de Sinais Inteligente (A Máquina de Estados Anti-Spam)
         sinais_alerta = ["COMPRA", "VENDA", "DESCOLAMENTO_MACRO", "BLOQUEIO_ELASTICO", "COMPRA BLOQUEADA", "VENDA BLOQUEADA", "OPERAÇÃO BLOQUEADA"]
         sinais_operacionais = ["COMPRA", "VENDA"] 
         agora = time.time()
@@ -181,18 +219,16 @@ def main():
         if sinal_db in sinais_alerta and dentro_do_pregao:
             mudou_status = (sinal_db != ultimo_sinal_enviado)
             passou_cooldown = (agora - tempo_ultimo_sinal) > (COOLDOWN_MINUTOS * 60)
-            
-            # Só avisa se for um Status NOVO ou se for um Sinal Operacional cujo Cooldown já expirou.
             deve_notificar = mudou_status or (sinal_db in sinais_operacionais and passou_cooldown)
             
             if deve_notificar:
                 # 1. Avisa o Operador no Telegram
-                notificar_telegram("SINAL", sinal_db, mensagem, fechamento_win, term_valor, distancia_vwap, tem_volume, tendencia_win, atr_atual, poc_atual)
+                notificar_telegram("SINAL", sinal_txt, mensagem, fechamento_win, term_valor, distancia_vwap, tem_volume, tendencia_win, atr_atual, poc_atual)
                 ultimo_sinal_enviado = sinal_db
                 tempo_ultimo_sinal = agora
 
-                # 2. EXECUÇÃO AUTOMÁTICA (Apenas se for Compra/Venda limpa)
-                if auto_trading_ativo and sinal_db in sinais_operacionais:
+                # 2. EXECUÇÃO AUTOMÁTICA
+                if auto_trading_ativo and sinal_db in sinais_operacionais and pode_abrir_ordem:
                     posicoes_abertas = mt5.positions_get(magic=777)
                     if posicoes_abertas is None or len(posicoes_abertas) == 0:
                         log.info(f"Auto-Trading acionado. Iniciando protocolo de {sinal_db}.")
@@ -211,10 +247,10 @@ def main():
                                 lote=resultado_ordem['lote'], 
                                 sl=resultado_ordem['sl'], 
                                 tp=resultado_ordem['tp'],
-                                motivo="Fluxo Confirmado + ATR"
+                                motivo=msg_microestrutura # Envia para o Telegram o motivo exato (Delta/Exaustão)
                             )
                     else:
-                        log.info("Sinal ignorado pelo Auto-Trading: Já existe uma posição aberta.")
+                        log.info("Sinal ignorado: Já existe uma posição aberta.")
 
         # Salva auditoria na Caixa Preta (Logs e Banco de Dados)
         log.info(f"WIN: {fechamento_win:.0f} | Termômetro: {term_valor:.2f} | Decisão: {sinal_db}")
