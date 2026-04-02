@@ -70,3 +70,51 @@ def executar_ordem(simbolo, tipo_sinal, lote, preco_atual, stop_loss_pts, take_p
         "tp": tp,
         "lote": lote
     }
+
+def zerar_posicoes(simbolo):
+    """
+    Escaneia a conta em busca de posições abertas no ativo e executa a 
+    liquidação a mercado (Zeragem Compulsória).
+    """
+    posicoes = mt5.positions_get(symbol=simbolo)
+    
+    if posicoes is None or len(posicoes) == 0:
+        return True, "Nenhuma posição em aberto."
+        
+    sucesso_total = True
+    
+    for pos in posicoes:
+        # Se está comprado, o tipo para fechar é Venda. Se está vendido, é Compra.
+        tipo_fechamento = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+        acao = "Vendendo" if tipo_fechamento == mt5.ORDER_TYPE_SELL else "Comprando"
+        
+        # Puxa o tick atual para mandar a mercado
+        tick = mt5.symbol_info_tick(simbolo)
+        preco_mercado = tick.bid if tipo_fechamento == mt5.ORDER_TYPE_SELL else tick.ask
+        
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": simbolo,
+            "volume": float(pos.volume),
+            "type": tipo_fechamento,
+            "position": pos.ticket, # <--- O SEGREDO: Referencia o ticket da ordem que está aberta
+            "price": float(preco_mercado),
+            "deviation": 20, # Derrapagem maior permitida por ser zeragem de segurança
+            "magic": 777,
+            "comment": "Zeragem Compulsoria",
+            "type_time": mt5.ORDER_TIME_DAY,
+            "type_filling": mt5.ORDER_FILLING_RETURN,
+        }
+        
+        log.warning(f"🚨 INICIANDO ZERAGEM: {acao} {pos.volume} lotes de {simbolo} a mercado para fechar ticket {pos.ticket}!")
+        
+        resultado = mt5.order_send(request)
+        
+        if resultado is None or resultado.retcode != mt5.TRADE_RETCODE_DONE:
+            erro = mt5.last_error() if resultado is None else f"{resultado.comment} ({resultado.retcode})"
+            log.error(f"FALHA CRÍTICA na zeragem do ticket {pos.ticket}. Erro: {erro}")
+            sucesso_total = False
+        else:
+            log.info(f"✅ Liquidação Concluída! Ticket {pos.ticket} encerrado com sucesso.")
+            
+    return sucesso_total, "Protocolo de liquidação executado."
