@@ -4,10 +4,17 @@ from core.logger import log
 def executar_ordem(simbolo, tipo_sinal, lote, preco_atual, stop_loss_pts, take_profit_pts):
     """
     Envia uma ordem a mercado para o MT5 com Stop Loss e Take Profit calculados.
-    tipo_sinal: "COMPRA" ou "VENDA"
+    Válido apenas para o pregão atual (ORDER_TIME_DAY).
     """
     
-    # 1. Prepara as variáveis baseadas na direção
+    # 1. BLINDAGEM OBRIGATÓRIA (Casting): 
+    # Converte os tipos numpy.float64 do Pandas para float nativo do Python
+    preco_atual = float(preco_atual)
+    stop_loss_pts = float(stop_loss_pts)
+    take_profit_pts = float(take_profit_pts)
+    lote = float(lote)
+
+    # 2. Prepara as variáveis baseadas na direção
     if tipo_sinal == "COMPRA":
         ordem_tipo = mt5.ORDER_TYPE_BUY
         sl = preco_atual - stop_loss_pts
@@ -22,34 +29,40 @@ def executar_ordem(simbolo, tipo_sinal, lote, preco_atual, stop_loss_pts, take_p
         log.warning(f"Sinal inválido para execução: {tipo_sinal}")
         return None
 
-    # 2. Monta o dicionário da requisição (A Boleta do MT5)
+    # 3. Monta o dicionário da requisição (A Boleta do MT5)
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": simbolo,
-        "volume": float(lote),
+        "volume": lote,
         "type": ordem_tipo,
         "price": preco_atual,
         "sl": sl,
         "tp": tp,
-        "deviation": 10, # Derrapagem máxima (slippage) em pontos
-        "magic": 777,    # Número de identificação do nosso Robô
+        "deviation": 10, 
+        "magic": 777,    
         "comment": "Nemesis Quant",
-        "type_time": mt5.ORDER_TIME_GTC,
+        "type_time": mt5.ORDER_TIME_DAY, # <--- CORREÇÃO APLICADA AQUI (Validade Diária)
         "type_filling": mt5.ORDER_FILLING_RETURN,
     }
 
-    # 3. Dispara a ordem
     log.info(f"[{simbolo}] {acao} {lote} lote(s) no {preco_atual}. SL: {sl} | TP: {tp}")
+    
+    # 4. O Disparo
     resultado = mt5.order_send(request)
 
-    # 4. Auditoria do Resultado
+    # 5. BLINDAGEM CONTRA CRASH
+    if resultado is None:
+        erro = mt5.last_error()
+        log.error(f"CRÍTICO: MT5 rejeitou a ordem e retornou None. Código de erro MT5: {erro}")
+        return None
+
+    # 6. Auditoria do Resultado da Corretora
     if resultado.retcode != mt5.TRADE_RETCODE_DONE:
-        log.error(f"Falha ao executar ordem: {resultado.comment} (Código: {resultado.retcode})")
+        log.error(f"Falha ao executar ordem na Genial: {resultado.comment} (Código: {resultado.retcode})")
         return None
         
     log.info(f"✅ Ordem Executada com Sucesso! Ticket: {resultado.order}")
     
-    # Retorna os dados para mandarmos pro Telegram
     return {
         "ticket": resultado.order,
         "preco_executado": resultado.price,

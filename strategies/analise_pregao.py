@@ -32,7 +32,7 @@ def analisar_cenario_avancado(term_valor, tendencia_sp, tendencia_win, fechament
         sinal_txt = f"{AMARELO}⚠️ OPERAÇÃO BLOQUEADA (Risco de Retorno à Média){RESET}"
         sinal_db = "BLOQUEIO_ELASTICO"
         if distancia_vwap > 0:
-            mensagem = f"O mercado esticou demais para cima da VWAP. A região de maior volume do dia (POC) está lá em {poc_atual:.0f}. O risco de a gravidade puxar o preço de volta é imenso."
+            mensagem = f"O mercado esticou demais para cima da VWAP. A região de maior volume do dia (POC) está lá em {poc_atual:.0f}. O risco de a gravidade puxar o preço de volta é imenso. [Risco de Retorno à Média]"
         else:
             mensagem = f"Não venda no fundo! Preço muito longe da VWAP. A chance de um repique violento buscando a POC ({poc_atual:.0f}) é altíssima."
 
