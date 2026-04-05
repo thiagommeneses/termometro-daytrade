@@ -21,13 +21,14 @@ from core.math_engine import (
     calcular_correlacao_sp
 )
 from strategies.analise_pregao import analisar_cenario_avancado
-from strategies.microestrutura import analisar_fluxo_m1
+from strategies.microestrutura import analisar_fluxo_m1, confirmar_sequencial
 from core.macro_calendar import verificar_alerta_macro
 from core.logger import log
 
 # Ferramentas de Comunicação e Execução
 from core.telegram_notifier import notificar_telegram, notificar_execucao
 from core.mt5_executor import executar_ordem, zerar_posicoes
+from core.trade_manager import gerenciar_trailing_stop
 
 # Configurações de Ativos
 TICKER_WIN = "WINJ26"
@@ -227,30 +228,54 @@ def main():
                 ultimo_sinal_enviado = sinal_db
                 tempo_ultimo_sinal = agora
 
-                # 2. EXECUÇÃO AUTOMÁTICA
+               # 2. EXECUÇÃO AUTOMÁTICA E GESTÃO DE LOTES (SCALE-IN)
                 if auto_trading_ativo and sinal_db in sinais_operacionais and pode_abrir_ordem:
-                    posicoes_abertas = mt5.positions_get(magic=777)
+                    
+                    # Parametrização da Tesouraria (Fatiamento 1/3 e 2/3)
+                    LOTE_PILOTO = 1.0  # A Sonda de reconhecimento
+                    LOTE_MAXIMO = 3.0  # A Mão Cheia total
+                    
+                    posicoes_abertas = mt5.positions_get(symbol=TICKER_WIN)
+                    
+                    # CENA 1: ESTAMOS ZERADOS (Disparo da Sonda de Reconhecimento)
                     if posicoes_abertas is None or len(posicoes_abertas) == 0:
-                        log.info(f"Auto-Trading acionado. Iniciando protocolo de {sinal_db}.")
+                        log.info(f"Auto-Trading acionado. Iniciando Sonda de {sinal_db} ({LOTE_PILOTO} lote).")
                         
                         stop_pts = atr_atual
-                        alvo_pts = atr_atual * 1.5
-                        lote_operacional = 1.0 
+                        alvo_pts = atr_atual * 2.0 # Alvo mais longo para a sonda
                         
-                        resultado_ordem = executar_ordem(TICKER_WIN, sinal_db, lote_operacional, fechamento_win, stop_pts, alvo_pts)
-                        
-                        if resultado_ordem:
-                            notificar_execucao(
-                                acao=sinal_db, 
-                                simbolo=TICKER_WIN, 
-                                preco=resultado_ordem['preco_executado'], 
-                                lote=resultado_ordem['lote'], 
-                                sl=resultado_ordem['sl'], 
-                                tp=resultado_ordem['tp'],
-                                motivo=msg_microestrutura # Envia para o Telegram o motivo exato (Delta/Exaustão)
-                            )
+                        resultado = executar_ordem(TICKER_WIN, sinal_db, LOTE_PILOTO, fechamento_win, stop_pts, alvo_pts)
+                        if resultado:
+                            notificar_execucao(sinal_db, TICKER_WIN, resultado['preco_executado'], LOTE_PILOTO, resultado['sl'], resultado['tp'], f"Sonda de Absorção: {msg_microestrutura}")
+
+                    # CENA 2: JÁ TEMOS POSIÇÃO ABERTA (Análise para Adição de Lotes / Scale-In)
                     else:
-                        log.info("Sinal ignorado: Já existe uma posição aberta.")
+                        pos = posicoes_abertas[0]
+                        direcao_atual = "COMPRA" if pos.type == mt5.ORDER_TYPE_BUY else "VENDA"
+                        
+                        # Se já estamos com a Sonda, mas ainda não enchemos a mão
+                        if pos.volume == LOTE_PILOTO:
+                            # Apenas adicionamos se a posição atual for na mesma direção do sinal Macro
+                            if direcao_atual == sinal_db:
+                                tem_sequencial, msg_seq = confirmar_sequencial(TICKER_WIN, direcao_atual)
+                                
+                                if tem_sequencial:
+                                    log.warning(f"🔥 FLUXO DETECTADO! Acionando Scale-In para encher a mão. {msg_seq}")
+                                    lote_adicional = LOTE_MAXIMO - LOTE_PILOTO
+                                    
+                                    # O MT5 faz o preço médio automaticamente ao enviarmos nova ordem
+                                    resultado_adicao = executar_ordem(TICKER_WIN, direcao_atual, lote_adicional, fechamento_win, atr_atual, atr_atual * 1.5)
+                                    
+                                    if resultado_adicao:
+                                        msg_telegram = f"Scale-In Executado! Mão cheia com {LOTE_MAXIMO} lotes. Motivo: {msg_seq}"
+                                        notificar_execucao("ADIÇÃO DE POSIÇÃO", TICKER_WIN, resultado_adicao['preco_executado'], lote_adicional, resultado_adicao['sl'], resultado_adicao['tp'], msg_telegram)
+                                else:
+                                    log.info(f"Posição já aberta com Sonda. Aguardando confirmação HFT para adição... {msg_seq}")
+                            else:
+                                log.info(f"Sinal de {sinal_db} ignorado pois estamos posicionados em {direcao_atual}.")
+                                
+                        elif pos.volume >= LOTE_MAXIMO:
+                            log.info(f"Operação rolando com Mão Cheia ({pos.volume} lotes). Gestor de Trailing Stop assumiu o controle.")
 
         # Salva auditoria na Caixa Preta (Logs e Banco de Dados)
         log.info(f"WIN: {fechamento_win:.0f} | Termômetro: {term_valor:.2f} | Decisão: {sinal_db}")
@@ -318,7 +343,15 @@ def main():
         print("Aguardando 10 segundos... (Teclas: 'T' = Telegram | 'A' = Ligar/Desl Auto-Trading)")
 
         # =================================================================
-        # 6. ESPERA INTELIGENTE E CAPTURA DE TECLAS (Non-Blocking)
+        # 6. GESTÃO ATIVA DA POSIÇÃO (Trailing Stop Contínuo)
+        # =================================================================
+        if auto_trading_ativo and dentro_do_pregao:
+            # Chama a função a cada ciclo do robô para vigiar as ordens abertas.
+            # Aciona a partir de 250pts de lucro e deixa o SL a 100pts de distância do preço.
+            gerenciar_trailing_stop(TICKER_WIN, gatilho_pts=250, margem_seguranca=100, trailing_step=30)
+
+        # =================================================================
+        # 7. ESPERA INTELIGENTE E CAPTURA DE TECLAS (Non-Blocking)
         # =================================================================
         espera_segundos = 10
         tempo_inicial = time.time()
