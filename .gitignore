@@ -17,6 +17,9 @@ env/
 .vscode/
 .idea/
 .cursor/
+.antigravity/
+.claude/
+.gemini/
 
 # Sistema operacional
 .DS_Store
@@ -25,3 +28,8 @@ env/
 *.log
 *.tmp
 temp/
+
+#skills
+.skills/
+.agents/
+.agent/
