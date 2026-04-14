@@ -3,17 +3,22 @@
 
 import MetaTrader5 as mt5
 import pandas as pd
+from typing import Optional
 from core.config import cfg
 
 # Caminhos das corretoras (Centralizados no .env)
-CAMINHO_GENIAL = cfg.MT5_PATH_GENIAL
-CAMINHO_ZERO = cfg.MT5_PATH_ZERO
+CAMINHO_GENIAL: str = cfg.MT5_PATH_GENIAL
+CAMINHO_ZERO: str = cfg.MT5_PATH_ZERO
 
-def puxar_dados(ticker, caminho_exe, tf, num_barras, completo=False):
-    if not mt5.initialize(path=caminho_exe):
-        return None
+def puxar_dados(ticker: str, caminho_exe: str, tf: int, num_barras: int, completo: bool = False, skip_init_shutdown: bool = False) -> Optional[pd.DataFrame]:
+    if not skip_init_shutdown:
+        if not mt5.initialize(path=caminho_exe):
+            return None
+            
     rates = mt5.copy_rates_from_pos(ticker, tf, 0, num_barras)
-    mt5.shutdown() 
+    
+    if not skip_init_shutdown:
+        mt5.shutdown() 
     
     if rates is None:
         return None

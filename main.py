@@ -1,15 +1,15 @@
 # ==============================================================================
 # TERMINAL QUANTITATIVO NEMESIS - MOTOR PRINCIPAL
-# O orquestrador central. Ele puxa os dados, calcula a matemática e toma a decisão.
 # ==============================================================================
 
 import time
 import os
-import msvcrt  # Biblioteca nativa do Windows para capturar teclas sem travar o loop
+import asyncio
+import msvcrt
 import MetaTrader5 as mt5
 from datetime import datetime
+from typing import Optional
 
-# Importando nossos módulos locais (Todas as ferramentas do nosso canivete suíço)
 from core.database import inicializar_banco, salvar_leitura
 from core.mt5_feed import puxar_dados, CAMINHO_GENIAL, CAMINHO_ZERO
 from core.math_engine import (
@@ -20,24 +20,22 @@ from core.math_engine import (
     calcular_poc_intradiario, 
     calcular_correlacao_sp
 )
+from core.models import MarketContext, AnalysisResult, FlowAnalysisResult, SequentialValidationResult
 from strategies.analise_pregao import analisar_cenario_avancado
 from strategies.microestrutura import analisar_fluxo_m1, confirmar_sequencial
 from core.macro_calendar import verificar_alerta_macro
 from core.logger import log
 from core.config import cfg
 
-# Ferramentas de Comunicação e Execução
 from core.telegram_notifier import notificar_telegram, notificar_execucao
 from core.mt5_executor import executar_ordem, zerar_posicoes
 from core.trade_manager import gerenciar_trailing_stop
 
-# Configurações de Ativos (Centralizadas no .env)
 TICKER_WIN = cfg.TICKER_WIN
 TICKER_VIX = cfg.TICKER_VIX
 TICKER_DXY = cfg.TICKER_DXY
 TICKER_SP  = cfg.TICKER_SP
 
-# Cores para o Terminal (Deixa a leitura visual mais rápida)
 VERDE = '\033[92m'
 VERMELHO = '\033[91m'
 AMARELO = '\033[93m'
@@ -45,282 +43,191 @@ AZUL = '\033[96m'
 MAGENTA = '\033[95m'
 RESET = '\033[0m'
 
-def limpar_tela():
-    """Limpa o prompt de comando para criar o efeito de painel atualizado"""
+def limpar_tela() -> None:
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def main():
-    # Inicia a conexão com o banco de dados (nossa caixa-preta)
-    conn = inicializar_banco()
-    log.info("=== SISTEMA QUANTITATIVO INICIADO ===")
-    
-    # Memória Anti-Spam para o Telegram
-    ultimo_sinal_enviado = ""
-    ultimo_alerta_enviado = ""
-    tempo_ultimo_sinal = 0  
-    COOLDOWN_MINUTOS = 5  # Tempo de silêncio do Telegram entre sinais repetidos
 
-    # Trava de Segurança Mestre do Auto-Trading (Inicia sempre desligado)
-    auto_trading_ativo = False
-    
-    # Loop Infinito (O coração do robô batendo)
-    while True:
-        limpar_tela()
-        hora_atual = datetime.now().strftime("%H:%M:%S")
-        print(f"🔄 Executando Motor Quantitativo Modular... [{hora_atual}]")
-
-        # =================================================================
-        # 1. EXTRAÇÃO DE DADOS (O Para-brisa)
-        # =================================================================
-        # Puxamos 600 barras do 5M para garantir a leitura da madrugada (Overnight)
-        df_win_full = puxar_dados(TICKER_WIN, CAMINHO_GENIAL, mt5.TIMEFRAME_M5, 600, completo=True)
-        df_vix = puxar_dados(TICKER_VIX, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 600)
-        df_dxy = puxar_dados(TICKER_DXY, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 600)
-        df_sp  = puxar_dados(TICKER_SP, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 600)
+class TradingOrchestrator:
+    def __init__(self):
+        self.conn = inicializar_banco()
+        self.ultimo_sinal_enviado = ""
+        self.ultimo_alerta_enviado = ""
+        self.tempo_ultimo_sinal = 0  
+        self.cooldown_minutos = 5
+        self.auto_trading_ativo = False
         
-        # NOVO: Puxa silenciosamente as últimas 15 velas de 1 minuto (M1)
-        df_win_m1 = puxar_dados(TICKER_WIN, CAMINHO_GENIAL, mt5.TIMEFRAME_M1, 15, completo=True)
+        # Parâmetros de risco e gestão
+        self.lote_piloto = 1.0
+        self.lote_maximo = 3.0
+        self.flag_tecla_t = False
         
-        # Puxamos a tendência da maré maior (Gráfico de 1 Hora)
-        df_win_60m = puxar_dados(TICKER_WIN, CAMINHO_GENIAL, mt5.TIMEFRAME_H1, 50)
-        df_sp_60m  = puxar_dados(TICKER_SP, CAMINHO_ZERO, mt5.TIMEFRAME_H1, 50)
+        log.info("=== SISTEMA QUANTITATIVO INICIADO ===")
+        
+    def extrair_dados(self) -> Optional[tuple]:
+        """1. EXTRAÇÃO DE DADOS BATCH"""
+        # Batch Genial
+        if not mt5.initialize(path=CAMINHO_GENIAL):
+            return None
+        df_win_full = puxar_dados(TICKER_WIN, CAMINHO_GENIAL, mt5.TIMEFRAME_M5, 600, completo=True, skip_init_shutdown=True)
+        df_win_m1 = puxar_dados(TICKER_WIN, CAMINHO_GENIAL, mt5.TIMEFRAME_M1, 15, completo=True, skip_init_shutdown=True)
+        df_win_60m = puxar_dados(TICKER_WIN, CAMINHO_GENIAL, mt5.TIMEFRAME_H1, 50, skip_init_shutdown=True)
+        mt5.shutdown()
 
-        # Se falhar a internet ou o MT5 cair, ele avisa e tenta de novo sem quebrar
+        # Batch Zero Markets
+        if not mt5.initialize(path=CAMINHO_ZERO):
+            return None
+        df_vix = puxar_dados(TICKER_VIX, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 600, skip_init_shutdown=True)
+        df_dxy = puxar_dados(TICKER_DXY, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 600, skip_init_shutdown=True)
+        df_sp  = puxar_dados(TICKER_SP, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 600, skip_init_shutdown=True)
+        df_sp_60m  = puxar_dados(TICKER_SP, CAMINHO_ZERO, mt5.TIMEFRAME_H1, 50, skip_init_shutdown=True)
+        mt5.shutdown()
+        
         if any(df is None for df in [df_win_full, df_vix, df_dxy, df_sp, df_win_60m, df_sp_60m, df_win_m1]):
-            print(f"{VERMELHO}Erro de conexão MT5. Tentando novamente...{RESET}")
-            log.error("Falha de comunicação com MetaTrader 5 (Genial ou Zero Markets).") 
-            time.sleep(10) 
-            continue
+            return None
+            
+        return (df_win_full, df_vix, df_dxy, df_sp, df_win_m1, df_win_60m, df_sp_60m)
 
-        # =================================================================
-        # 2. MOTOR MATEMÁTICO (A Inteligência)
-        # =================================================================
-        # Calcula VWAP, Volume, e os Z-Scores globais (Termômetro)
+    def processar_motor_matematico(self, dfs: tuple) -> Optional[dict]:
+        """2. MOTOR MATEMÁTICO (A Inteligência)"""
+        df_win_full, df_vix, df_dxy, df_sp, df_win_m1, df_win_60m, df_sp_60m = dfs
+        
         vwap_atual, vol_atual, vol_media = calcular_vwap_e_volume(df_win_full)
         df_win_close = df_win_full[['close']].rename(columns={'close': TICKER_WIN})        
         df_final = calcular_zscore_e_termometro(df_win_close, df_vix, df_dxy, df_sp, TICKER_WIN, TICKER_SP, TICKER_DXY, TICKER_VIX)
         
-        # Proteção caso seja início do dia e não tenha dados da madrugada suficientes
         if df_final.empty:
-            print(f"{AMARELO}Aguardando sobreposição de fuso horário da madrugada...{RESET}")
-            time.sleep(10)
-            continue
-            
-        # Calcula Tendência 60M, ATR (Risco), POC (Volume Acumulado) e Correlação
+            return None
+
         tendencia_win = calcular_tendencia_60m(df_win_60m, TICKER_WIN)
         tendencia_sp = calcular_tendencia_60m(df_sp_60m, TICKER_SP)
         atr_atual = calcular_atr(df_win_full)
         poc_atual = calcular_poc_intradiario(df_win_full)
         correlacao_atual = calcular_correlacao_sp(df_win_close, df_sp)
 
-        # Extração das variáveis atuais para tomada de decisão
         linha_atual = df_final.iloc[-1]
-        fechamento_candle = linha_atual.name.strftime("%H:%M")
-        fechamento_win = df_win_full['close'].iloc[-1]
-        distancia_vwap = fechamento_win - vwap_atual
-        tem_volume = vol_atual > vol_media
-        term_valor = linha_atual['Termometro']
-        z_win = linha_atual[f'Z_{TICKER_WIN}']
-        timestamp_db = linha_atual.name.strftime("%Y-%m-%d %H:%M:00")
-
-        # Verifica Calendário Econômico (Payroll, FOMC, etc)
-        alerta_macro = verificar_alerta_macro(hora_atual)
-
-        # =================================================================
-        # 3. ESTRATÉGIA E DECISÃO (O Cérebro)
-        # =================================================================
-        sinal_txt, sinal_db, mensagem = analisar_cenario_avancado(
-            term_valor, tendencia_sp, tendencia_win, fechamento_win, vwap_atual, 
-            tem_volume, distancia_vwap, poc_atual, atr_atual, correlacao_atual, alerta_macro
+        fechamento_win = float(df_win_full['close'].iloc[-1])
+        vol_atual = float(vol_atual)
+        vol_media = float(vol_media)
+        
+        ctx = MarketContext(
+            termometro=linha_atual['Termometro'],
+            tendencia_sp=tendencia_sp,
+            tendencia_win=tendencia_win,
+            fechamento_win=fechamento_win,
+            vwap_atual=vwap_atual,
+            tem_volume=(vol_atual > vol_media),
+            distancia_vwap=fechamento_win - vwap_atual,
+            poc_atual=poc_atual,
+            atr_atual=atr_atual,
+            correlacao=correlacao_atual,
+            alerta_macro=verificar_alerta_macro(datetime.now().strftime("%H:%M:%S"))
         )
-
-        # -----------------------------------------------------------------
-        # NOVO: FILTRO DE EXPEDIENTE, WARM-UP E MICROESTRUTURA (FOOTPRINT)
-        # -----------------------------------------------------------------
-        agora_dt = datetime.now()
-        minutos_desde_abertura = (agora_dt.hour * 60 + agora_dt.minute) - (9 * 60)
-        em_warmup = 0 <= minutos_desde_abertura < 15
-
-        # HORÁRIO DE CORTE (Parametrizável: 16h45)
-        horario_corte = agora_dt.replace(hour=16, minute=45, second=0, microsecond=0)
-        pode_abrir_ordem = agora_dt <= horario_corte
-
-        # O Cão de Guarda: Se o 5M deu sinal, SEMPRE consultamos a fita do M1
-        if sinal_db in ["COMPRA", "VENDA"]:
-            if not pode_abrir_ordem:
-                # Trava de Fim de Expediente
-                sinal_db = f"{sinal_db} BLOQUEADA"
-                mensagem = f"Horário limite atingido ({horario_corte.strftime('%H:%M')}). Novas operações bloqueadas para evitar falta de liquidez."
-                sinal_txt = f"⏳ {sinal_db} (Fim de Expediente)"
-            else:
-                # O Expediente está rolando. Aciona a leitura de Tick a Tick.
-                fluxo_aprovado, msg_microestrutura = analisar_fluxo_m1(TICKER_WIN, df_win_m1, sinal_db)
-                
-                # Cenas do 1º Tempo (09:00 as 09:15) - Abertura Caótica
-                if em_warmup:
-                    if fluxo_aprovado and "FURA-FILA" in msg_microestrutura:
-                        log.info(f"FURA-FILA WARM-UP ATIVADO: {msg_microestrutura}")
-                        mensagem = f"Warm-up ignorado por gatilho de MICROESTRUTURA. {msg_microestrutura}"
-                        sinal_txt = f"🔥 {sinal_db} (Antecipação Institucional M1)"
-                    else:
-                        sinal_db = f"{sinal_db} BLOQUEADA"
-                        mensagem = f"Warm-up de Abertura. A VWAP não ancorou. {msg_microestrutura}"
-                        sinal_txt = f"⚠️ {sinal_db} (Aguardando Amaciamento)"
-                
-                # Cenas do 2º Tempo (09:15 até 16:45) - Pregão Contínuo
-                else:
-                    if fluxo_aprovado == False and "BLOQUEIO" in msg_microestrutura:
-                        # O 5M achou lindo, mas a fita desmentiu (Agressão Oca)
-                        sinal_db = f"{sinal_db} BLOQUEADA"
-                        mensagem = f"Falso Rompimento Detectado pela Fita! {msg_microestrutura}"
-                        sinal_txt = f"🛑 {sinal_db} (Sem Saldo Delta)"
-                        log.warning(mensagem)
-                    elif fluxo_aprovado and "FURA-FILA" in msg_microestrutura:
-                        # O 5M e a Fita estão perfeitamente alinhados
-                        mensagem += f" | Crivo do Fluxo: {msg_microestrutura}"
-                        sinal_txt = f"🎯 {sinal_db} (Confirmação M1)"
-        # -----------------------------------------------------------------
-
-        # =================================================================
-        # 4. GATILHOS DE COMUNICAÇÃO, EXECUÇÃO E ZERAGEM COMPULSÓRIA
-        # =================================================================
         
-        horario_abertura = agora_dt.replace(hour=8, minute=55, second=0, microsecond=0)
-        horario_fechamento = agora_dt.replace(hour=18, minute=0, second=0, microsecond=0)
-        dentro_do_pregao = horario_abertura <= agora_dt <= horario_fechamento
+        return {
+            "ctx": ctx,
+            "df_win_m1": df_win_m1,
+            "linha_atual": linha_atual,
+            "vol_atual": vol_atual,
+            "vol_media": vol_media,
+            "z_win": linha_atual[f'Z_{TICKER_WIN}'],
+        }
 
-        # A) ROTINA DE LIQUIDAÇÃO FORÇADA (SEGURANÇA DE CAPITAL - 16:55)
-        horario_zeragem = agora_dt.replace(hour=16, minute=55, second=0, microsecond=0)
-        if agora_dt >= horario_zeragem and dentro_do_pregao:
-            if auto_trading_ativo:
-                posicoes_abertas = mt5.positions_get(symbol=TICKER_WIN)
-                if posicoes_abertas and len(posicoes_abertas) > 0:
-                    msg_alerta = "⏰ 16:55 - Acionando Protocolo de Zeragem Forçada para proteger o capital de Gaps noturnos."
-                    log.warning(msg_alerta)
-                    notificar_telegram("ALERTA CRÍTICO", "ZERAGEM COMPULSÓRIA", msg_alerta, fechamento_win, term_valor, distancia_vwap, tem_volume, tendencia_win, atr_atual, poc_atual)
-                    
-                    # Executa a limpeza do book
-                    sucesso, msg = zerar_posicoes(TICKER_WIN)
-                    
-                    # Desliga o robô instantaneamente para impedir reentradas nos 5 minutos finais
-                    auto_trading_ativo = False
-                    log.info("Auto-Trading DESLIGADO automaticamente após a zeragem.")
-
-        # B) Notifica Alerta Macro (Apenas 1 vez por evento)
-        if alerta_macro and alerta_macro != ultimo_alerta_enviado and dentro_do_pregao:
-            notificar_telegram("ALERTA MACRO", sinal_db, alerta_macro, fechamento_win, term_valor, distancia_vwap, tem_volume, tendencia_win, atr_atual, poc_atual)
-            ultimo_alerta_enviado = alerta_macro
-        if not alerta_macro:
-            ultimo_alerta_enviado = ""
-
-        # C) Gatilho de Sinais Inteligente (A Máquina de Estados Anti-Spam)
-        sinais_alerta = ["COMPRA", "VENDA", "DESCOLAMENTO_MACRO", "BLOQUEIO_ELASTICO", "COMPRA BLOQUEADA", "VENDA BLOQUEADA", "OPERAÇÃO BLOQUEADA"]
-        sinais_operacionais = ["COMPRA", "VENDA"] 
-        agora = time.time()
-        
-        if sinal_db in sinais_alerta and dentro_do_pregao:
-            mudou_status = (sinal_db != ultimo_sinal_enviado)
-            passou_cooldown = (agora - tempo_ultimo_sinal) > (COOLDOWN_MINUTOS * 60)
-            deve_notificar = mudou_status or (sinal_db in sinais_operacionais and passou_cooldown)
+    def gerenciar_ordens(self, sinal_db: str, ctx: MarketContext, msg_microestrutura: str):
+        """Gerencia execução scale-in de ordens. Refatorado com Guard Clauses."""
+        if not self.auto_trading_ativo:
+            return
             
-            if deve_notificar:
-                # 1. Avisa o Operador no Telegram
-                notificar_telegram("SINAL", sinal_txt, mensagem, fechamento_win, term_valor, distancia_vwap, tem_volume, tendencia_win, atr_atual, poc_atual)
-                ultimo_sinal_enviado = sinal_db
-                tempo_ultimo_sinal = agora
+        if sinal_db not in ["COMPRA", "VENDA"]:
+            return
+            
+        posicoes_abertas = mt5.positions_get(symbol=TICKER_WIN)
+        
+        # CENA 1: ESTAMOS ZERADOS (Disparo da Sonda de Reconhecimento)
+        if posicoes_abertas is None or len(posicoes_abertas) == 0:
+            log.info(f"Auto-Trading acionado. Iniciando Sonda de {sinal_db} ({self.lote_piloto} lote).")
+            resultado = executar_ordem(
+                TICKER_WIN, sinal_db, self.lote_piloto, ctx.fechamento_win, ctx.atr_atual, ctx.atr_atual * 2.0
+            )
+            if resultado:
+                notificar_execucao(sinal_db, TICKER_WIN, resultado.preco_executado, self.lote_piloto, resultado.sl, resultado.tp, f"Sonda de Absorção: {msg_microestrutura}")
+            return
 
-               # 2. EXECUÇÃO AUTOMÁTICA E GESTÃO DE LOTES (SCALE-IN)
-                if auto_trading_ativo and sinal_db in sinais_operacionais and pode_abrir_ordem:
-                    
-                    # Parametrização da Tesouraria (Fatiamento 1/3 e 2/3)
-                    LOTE_PILOTO = 1.0  # A Sonda de reconhecimento
-                    LOTE_MAXIMO = 3.0  # A Mão Cheia total
-                    
-                    posicoes_abertas = mt5.positions_get(symbol=TICKER_WIN)
-                    
-                    # CENA 1: ESTAMOS ZERADOS (Disparo da Sonda de Reconhecimento)
-                    if posicoes_abertas is None or len(posicoes_abertas) == 0:
-                        log.info(f"Auto-Trading acionado. Iniciando Sonda de {sinal_db} ({LOTE_PILOTO} lote).")
-                        
-                        stop_pts = atr_atual
-                        alvo_pts = atr_atual * 2.0 # Alvo mais longo para a sonda
-                        
-                        resultado = executar_ordem(TICKER_WIN, sinal_db, LOTE_PILOTO, fechamento_win, stop_pts, alvo_pts)
-                        if resultado:
-                            notificar_execucao(sinal_db, TICKER_WIN, resultado['preco_executado'], LOTE_PILOTO, resultado['sl'], resultado['tp'], f"Sonda de Absorção: {msg_microestrutura}")
-
-                    # CENA 2: JÁ TEMOS POSIÇÃO ABERTA (Análise para Adição de Lotes / Scale-In)
-                    else:
-                        pos = posicoes_abertas[0]
-                        direcao_atual = "COMPRA" if pos.type == mt5.ORDER_TYPE_BUY else "VENDA"
-                        
-                        # Se já estamos com a Sonda, mas ainda não enchemos a mão
-                        if pos.volume == LOTE_PILOTO:
-                            # Apenas adicionamos se a posição atual for na mesma direção do sinal Macro
-                            if direcao_atual == sinal_db:
-                                tem_sequencial, msg_seq = confirmar_sequencial(TICKER_WIN, direcao_atual)
-                                
-                                if tem_sequencial:
-                                    log.warning(f"🔥 FLUXO DETECTADO! Acionando Scale-In para encher a mão. {msg_seq}")
-                                    lote_adicional = LOTE_MAXIMO - LOTE_PILOTO
-                                    
-                                    # O MT5 faz o preço médio automaticamente ao enviarmos nova ordem
-                                    resultado_adicao = executar_ordem(TICKER_WIN, direcao_atual, lote_adicional, fechamento_win, atr_atual, atr_atual * 1.5)
-                                    
-                                    if resultado_adicao:
-                                        msg_telegram = f"Scale-In Executado! Mão cheia com {LOTE_MAXIMO} lotes. Motivo: {msg_seq}"
-                                        notificar_execucao("ADIÇÃO DE POSIÇÃO", TICKER_WIN, resultado_adicao['preco_executado'], lote_adicional, resultado_adicao['sl'], resultado_adicao['tp'], msg_telegram)
-                                else:
-                                    log.info(f"Posição já aberta com Sonda. Aguardando confirmação HFT para adição... {msg_seq}")
-                            else:
-                                log.info(f"Sinal de {sinal_db} ignorado pois estamos posicionados em {direcao_atual}.")
-                                
-                        elif pos.volume >= LOTE_MAXIMO:
-                            log.info(f"Operação rolando com Mão Cheia ({pos.volume} lotes). Gestor de Trailing Stop assumiu o controle.")
-
-        # Salva auditoria na Caixa Preta (Logs e Banco de Dados)
-        log.info(f"WIN: {fechamento_win:.0f} | Termômetro: {term_valor:.2f} | Decisão: {sinal_db}")
-        dados_bd = (
-            timestamp_db, fechamento_win, z_win, linha_atual[f'Z_{TICKER_SP}'], 
-            linha_atual[f'Z_{TICKER_DXY}'], linha_atual[f'Z_{TICKER_VIX}'], 
-            term_valor, sinal_db, vwap_atual, distancia_vwap, vol_atual, vol_media
+        # CENA 2: JÁ TEMOS POSIÇÃO ABERTA (Análise para Scale-In)
+        pos = posicoes_abertas[0]
+        direcao_atual = "COMPRA" if pos.type == mt5.ORDER_TYPE_BUY else "VENDA"
+        
+        if pos.volume >= self.lote_maximo:
+            log.info(f"Operação rolando com Mão Cheia ({pos.volume} lotes). Gestor de Trailing Stop assumiu o controle.")
+            return
+            
+        if pos.volume != self.lote_piloto or direcao_atual != sinal_db:
+            if direcao_atual != sinal_db:
+                log.info(f"Sinal de {sinal_db} ignorado pois estamos posicionados em {direcao_atual}.")
+            return
+            
+        resultado_seq = confirmar_sequencial(TICKER_WIN, direcao_atual)
+        if not resultado_seq.confirmado:
+            log.info(f"Posição já aberta com Sonda. Aguardando confirmação HFT para adição... {resultado_seq.mensagem}")
+            return
+            
+        log.warning(f"🔥 FLUXO DETECTADO! Acionando Scale-In para encher a mão. {resultado_seq.mensagem}")
+        lote_adicional = self.lote_maximo - self.lote_piloto
+        resultado_adicao = executar_ordem(
+            TICKER_WIN, direcao_atual, lote_adicional, ctx.fechamento_win, ctx.atr_atual, ctx.atr_atual * 1.5
         )
-        salvar_leitura(conn, dados_bd)
+        if resultado_adicao:
+            msg_telegram = f"Scale-In Executado! Mão cheia com {self.lote_maximo} lotes. Motivo: {resultado_seq.mensagem}"
+            notificar_execucao("ADIÇÃO DE POSIÇÃO", TICKER_WIN, resultado_adicao.preco_executado, lote_adicional, resultado_adicao.sl, resultado_adicao.tp, msg_telegram)
 
-        # =================================================================
-        # 5. RENDERIZAÇÃO DA TELA (Painel Visual)
-        # =================================================================
-        cor_vol = VERDE if tem_volume else AMARELO
-        status_vol_txt = "ACIMA da Média (Confirmado)" if tem_volume else "ABAIXO da Média (Movimento Oco)"
-        status_vwap = f"{VERDE}Preço Acima (Comprados no Controle){RESET}" if distancia_vwap > 0 else f"{VERMELHO}Preço Abaixo (Vendidos no Controle){RESET}"
-        cor_win_60 = VERDE if tendencia_win == "ALTA" else VERMELHO
-        cor_sp_60 = VERDE if tendencia_sp == "ALTA" else VERMELHO
+    def rotina_seguranca_liquidacao(self, agora_dt: datetime, dentro_do_pregao: bool, analise: dict):
+        horario_zeragem = agora_dt.replace(hour=16, minute=55, second=0, microsecond=0)
+        if agora_dt >= horario_zeragem and dentro_do_pregao and self.auto_trading_ativo:
+            posicoes = mt5.positions_get(symbol=TICKER_WIN)
+            if posicoes and len(posicoes) > 0:
+                msg_alerta = "⏰ 16:55 - Acionando Protocolo de Zeragem Forçada para proteger o capital de Gaps noturnos."
+                log.warning(msg_alerta)
+                ctx = analise["ctx"]
+                notificar_telegram("ALERTA CRÍTICO", "ZERAGEM COMPULSÓRIA", msg_alerta, 
+                    ctx.fechamento_win, ctx.termometro, ctx.distancia_vwap, 
+                    ctx.tem_volume, ctx.tendencia_win, ctx.atr_atual, ctx.poc_atual)
+                
+                zerar_posicoes(TICKER_WIN)
+                self.auto_trading_ativo = False
+                log.info("Auto-Trading DESLIGADO automaticamente após a zeragem.")
+
+    def renderizar_tela(self, hora_atual: str, estado: dict, sinal_txt: str, mensagem: str):
+        ctx = estado["ctx"]
+        cor_vol = VERDE if ctx.tem_volume else AMARELO
+        status_vol_txt = "ACIMA da Média (Confirmado)" if ctx.tem_volume else "ABAIXO da Média (Movimento Oco)"
+        status_vwap = f"{VERDE}Preço Acima (Comprados no Controle){RESET}" if ctx.distancia_vwap > 0 else f"{VERMELHO}Preço Abaixo (Vendidos no Controle){RESET}"
+        cor_win_60 = VERDE if ctx.tendencia_win == "ALTA" else VERMELHO
+        cor_sp_60 = VERDE if ctx.tendencia_sp == "ALTA" else VERMELHO
 
         limpar_tela()
         print("="*65)
         print(f"   TERMÔMETRO INSTITUCIONAL - MACRO + VWAP + 60M + VOLUME   ")
         print("="*65)
-        print(f"Última Atualização: {hora_atual} | Ref. Candle: {fechamento_candle}\n")
+        print(f"Última Atualização: {hora_atual} | Ref. Candle: {estado['linha_atual'].name.strftime('%H:%M')}\n")
         
         print(f"► SINAL ATUAL: {sinal_txt}\n")
-        print(f"Pontuação Termômetro Global: {term_valor:.2f}")
+        print(f"Pontuação Termômetro Global: {ctx.termometro:.2f}")
         print("-" * 65)
         
         print(f"📊 FLUXO DE VOLUME (No Candle de 5M Atual):")
         print(f"   Status do Lote: {cor_vol}{status_vol_txt}{RESET}")
-        print(f"   Vol. Atual: {vol_atual:.0f} | Vol. Médio: {vol_media:.0f}")
+        print(f"   Vol. Atual: {estado['vol_atual']:.0f} | Vol. Médio: {estado['vol_media']:.0f}")
         print("-" * 65)
 
         print(f"🧲 GRAVIDADE INSTITUCIONAL (VWAP Diária):")
-        print(f"   VWAP Atual   : {vwap_atual:.0f}")
-        print(f"   Distância    : {distancia_vwap:+.0f} pontos -> {status_vwap}")
+        print(f"   VWAP Atual   : {ctx.vwap_atual:.0f}")
+        print(f"   Distância    : {ctx.distancia_vwap:+.0f} pontos -> {status_vwap}")
         print("-" * 65)
 
-        print(f"🎯 POC Atual: {poc_atual:.0f} | 📏 ATR (Volatilidade): {atr_atual:.0f} pts | 🔗 Corr(WINxSP): {correlacao_atual:.2f}")
+        print(f"🎯 POC Atual: {ctx.poc_atual:.0f} | 📏 ATR (Volatilidade): {ctx.atr_atual:.0f} pts | 🔗 Corr(WINxSP): {ctx.correlacao:.2f}")
 
         print(f"🌊 FILTRO MACRO (Tendência 60 Minutos):")
-        print(f"   Maré Local (WIN)  : {cor_win_60}{tendencia_win}{RESET}")
-        print(f"   Maré Global (S&P) : {cor_sp_60}{tendencia_sp}{RESET}")
+        print(f"   Maré Local (WIN)  : {cor_win_60}{ctx.tendencia_win}{RESET}")
+        print(f"   Maré Global (S&P) : {cor_sp_60}{ctx.tendencia_sp}{RESET}")
         print("-" * 65)
         
         print(f"{AZUL}💡 ANÁLISE DO CENÁRIO:{RESET}")
@@ -328,57 +235,180 @@ def main():
         print("="*65)
         
         print("RAIO-X DOS ATIVOS (Z-Score no 5M):")
-        print(f"🇧🇷 WIN  : {z_win:>5.2f} (Cot: {fechamento_win:.0f})")
-        print(f"🇺🇸 S&P  : {linha_atual[f'Z_{TICKER_SP}']:>5.2f}")
-        print(f"💵 DXY  : {linha_atual[f'Z_{TICKER_DXY}']:>5.2f}")
-        print(f"😨 VIX  : {linha_atual[f'Z_{TICKER_VIX}']:>5.2f}")
+        print(f"🇧🇷 WIN  : {estado['z_win']:>5.2f} (Cot: {ctx.fechamento_win:.0f})")
+        print(f"🇺🇸 S&P  : {estado['linha_atual'][f'Z_{TICKER_SP}']:>5.2f}")
+        print(f"💵 DXY  : {estado['linha_atual'][f'Z_{TICKER_DXY}']:>5.2f}")
+        print(f"😨 VIX  : {estado['linha_atual'][f'Z_{TICKER_VIX}']:>5.2f}")
         print("="*65)
                 
-        # Painel de Status do Auto-Trading
-        status_cor = VERDE if auto_trading_ativo else VERMELHO
-        status_texto = "LIGADO" if auto_trading_ativo else "DESLIGADO"
+        status_cor = VERDE if self.auto_trading_ativo else VERMELHO
+        status_texto = "LIGADO" if self.auto_trading_ativo else "DESLIGADO"
         print("="*75)
         print(f"🤖 AUTO-TRADING: {status_cor}{status_texto}{RESET} (Pressione 'A' para alternar)")
         print("="*75)
-        
         print("Aguardando 10 segundos... (Teclas: 'T' = Telegram | 'A' = Ligar/Desl Auto-Trading)")
 
-        # =================================================================
-        # 6. GESTÃO ATIVA DA POSIÇÃO (Trailing Stop Contínuo)
-        # =================================================================
-        if auto_trading_ativo and dentro_do_pregao:
-            # Chama a função a cada ciclo do robô para vigiar as ordens abertas.
-            # Aciona a partir de 250pts de lucro e deixa o SL a 100pts de distância do preço.
-            gerenciar_trailing_stop(TICKER_WIN, gatilho_pts=250, margem_seguranca=100, trailing_step=30)
-
-        # =================================================================
-        # 7. ESPERA INTELIGENTE E CAPTURA DE TECLAS (Non-Blocking)
-        # =================================================================
-        espera_segundos = 10
-        tempo_inicial = time.time()
-        
-        # O programa fica preso neste micro-loop por 10 segundos prestando atenção no teclado
-        while time.time() - tempo_inicial < espera_segundos:
-            # Se o usuário apertar fisicamente alguma tecla
+    async def escutar_teclado(self):
+        """Task rodando em background para capturar inputs de teclado de forma assíncrona"""
+        while True:
             if msvcrt.kbhit():
                 tecla = msvcrt.getch().decode('utf-8', errors='ignore').lower()
                 
-                # Tecla T: Dispara mensagem manual pro Telegram
                 if tecla == 't':
-                    print(f"\n{MAGENTA}🚀 [HOTKEY] Tecla 'T' acionada! Disparando envio manual...{RESET}")
-                    notificar_telegram("VALIDAÇÃO MANUAL", sinal_db, mensagem, fechamento_win, term_valor, distancia_vwap, tem_volume, tendencia_win, atr_atual, poc_atual)
-                    while msvcrt.kbhit(): msvcrt.getch() # Limpa o buffer de teclas (Evita duplo clique)
-                    time.sleep(1) 
-                    
-                # Tecla A: Liga ou Desliga o Robô de Execução
+                    self.flag_tecla_t = True
                 elif tecla == 'a':
-                    auto_trading_ativo = not auto_trading_ativo
-                    estado_log = "ATIVADO" if auto_trading_ativo else "DESATIVADO"
+                    self.auto_trading_ativo = not self.auto_trading_ativo
+                    estado_log = "ATIVADO" if self.auto_trading_ativo else "DESATIVADO"
                     log.info(f"Comando manual: Auto-Trading {estado_log} pelo usuário.")
-                    while msvcrt.kbhit(): msvcrt.getch() # Limpa buffer
-                    break # Quebra o loop de espera para atualizar a tela imediatamente e mostrar a cor vermelha/verde
+                
+                while msvcrt.kbhit(): msvcrt.getch()
             
-            time.sleep(0.1) # Dorme 100ms a cada ciclo para não sobrecarregar a CPU
+            await asyncio.sleep(0.1)
+
+    async def aguardar_inteligente(self, analise: dict, sinal_db: str, mensagem: str):
+        espera_segundos = 10
+        ctx = analise["ctx"]
+        
+        for _ in range(int(espera_segundos / 0.1)):
+            if self.flag_tecla_t:
+                print(f"\n{MAGENTA}🚀 [HOTKEY] Tecla 'T' acionada! Disparando envio manual...{RESET}")
+                notificar_telegram("VALIDAÇÃO MANUAL", sinal_db, mensagem, 
+                    ctx.fechamento_win, ctx.termometro, ctx.distancia_vwap, 
+                    ctx.tem_volume, ctx.tendencia_win, ctx.atr_atual, ctx.poc_atual)
+                self.flag_tecla_t = False
+                await asyncio.sleep(1)
+            
+            await asyncio.sleep(0.1)
+
+    async def run(self):
+        """Loop principal abstraído em orquestrador e assíncrono"""
+        task_teclado = asyncio.create_task(self.escutar_teclado())
+        try:
+            while True:
+                limpar_tela()
+                agora_dt = datetime.now()
+                hora_atual = agora_dt.strftime("%H:%M:%S")
+                print(f"🔄 Executando Motor Quantitativo Modular... [{hora_atual}]")
+
+                # 1. Extração de Dados
+                dfs = self.extrair_dados()
+                if not dfs:
+                    print(f"{VERMELHO}Erro de conexão MT5. Tentando novamente...{RESET}")
+                    log.error("Falha de comunicação com MetaTrader 5 (Genial ou Zero Markets).") 
+                    await asyncio.sleep(10) 
+                    continue
+
+                # 2. Processamento Matemático
+                estado = self.processar_motor_matematico(dfs)
+                if not estado:
+                    print(f"{AMARELO}Aguardando sobreposição de fuso horário da madrugada...{RESET}")
+                    await asyncio.sleep(10)
+                    continue
+
+                ctx: MarketContext = estado["ctx"]
+                df_win_m1 = estado["df_win_m1"]
+                
+                # 3. Estratégia e Decisão
+                resultado_analise: AnalysisResult = analisar_cenario_avancado(ctx)
+                sinal_db = resultado_analise.sinal_db
+                sinal_txt = resultado_analise.sinal_txt
+                mensagem = resultado_analise.mensagem
+
+                # Filtros de Horário e Fluxo
+                minutos_desde_abertura = (agora_dt.hour * 60 + agora_dt.minute) - (9 * 60)
+                em_warmup = 0 <= minutos_desde_abertura < 15
+                horario_corte = agora_dt.replace(hour=16, minute=45, second=0, microsecond=0)
+                pode_abrir_ordem = agora_dt <= horario_corte
+
+                msg_microestrutura = ""
+                if sinal_db in ["COMPRA", "VENDA"]:
+                    if not pode_abrir_ordem:
+                        sinal_db = f"{sinal_db} BLOQUEADA"
+                        mensagem = f"Horário limite atingido ({horario_corte.strftime('%H:%M')}). Novas operações bloqueadas."
+                        sinal_txt = f"⏳ {sinal_db} (Fim de Expediente)"
+                    else:
+                        fluxo_result: FlowAnalysisResult = analisar_fluxo_m1(TICKER_WIN, df_win_m1, sinal_db)
+                        fluxo_aprovado = fluxo_result.aprovado
+                        msg_microestrutura = fluxo_result.mensagem
+
+                        if em_warmup:
+                            if fluxo_aprovado and "FURA-FILA" in msg_microestrutura:
+                                log.info(f"FURA-FILA WARM-UP ATIVADO: {msg_microestrutura}")
+                                mensagem = f"Warm-up ignorado por gatilho de MICROESTRUTURA. {msg_microestrutura}"
+                                sinal_txt = f"🔥 {sinal_db} (Antecipação Institucional M1)"
+                            else:
+                                sinal_db = f"{sinal_db} BLOQUEADA"
+                                mensagem = f"Warm-up de Abertura. A VWAP não ancorou. {msg_microestrutura}"
+                                sinal_txt = f"⚠️ {sinal_db} (Aguardando Amaciamento)"
+                        else:
+                            if not fluxo_aprovado and "BLOQUEIO" in msg_microestrutura:
+                                sinal_db = f"{sinal_db} BLOQUEADA"
+                                mensagem = f"Falso Rompimento Detectado pela Fita! {msg_microestrutura}"
+                                sinal_txt = f"🛑 {sinal_db} (Sem Saldo Delta)"
+                                log.warning(mensagem)
+                            elif fluxo_aprovado and "FURA-FILA" in msg_microestrutura:
+                                mensagem += f" | Crivo do Fluxo: {msg_microestrutura}"
+                                sinal_txt = f"🎯 {sinal_db} (Confirmação M1)"
+
+                horario_abertura = agora_dt.replace(hour=8, minute=55, second=0, microsecond=0)
+                horario_fechamento = agora_dt.replace(hour=18, minute=0, second=0, microsecond=0)
+                dentro_do_pregao = horario_abertura <= agora_dt <= horario_fechamento
+
+                # 4. Gatilhos de Comunicação e Segurança
+                self.rotina_seguranca_liquidacao(agora_dt, dentro_do_pregao, estado)
+
+                if ctx.alerta_macro and ctx.alerta_macro != self.ultimo_alerta_enviado and dentro_do_pregao:
+                    notificar_telegram("ALERTA MACRO", sinal_db, ctx.alerta_macro, ctx.fechamento_win, ctx.termometro, ctx.distancia_vwap, ctx.tem_volume, ctx.tendencia_win, ctx.atr_atual, ctx.poc_atual)
+                    self.ultimo_alerta_enviado = ctx.alerta_macro
+                if not ctx.alerta_macro:
+                    self.ultimo_alerta_enviado = ""
+
+                sinais_alerta = ["COMPRA", "VENDA", "DESCOLAMENTO_MACRO", "BLOQUEIO_ELASTICO", "COMPRA BLOQUEADA", "VENDA BLOQUEADA", "OPERAÇÃO BLOQUEADA"]
+                sinais_operacionais = ["COMPRA", "VENDA"] 
+                agora = time.time()
+                
+                if sinal_db in sinais_alerta and dentro_do_pregao:
+                    mudou_status = (sinal_db != self.ultimo_sinal_enviado)
+                    passou_cooldown = (agora - self.tempo_ultimo_sinal) > (self.cooldown_minutos * 60)
+                    deve_notificar = mudou_status or (sinal_db in sinais_operacionais and passou_cooldown)
+                    
+                    if deve_notificar:
+                        notificar_telegram("SINAL", sinal_txt, mensagem, ctx.fechamento_win, ctx.termometro, ctx.distancia_vwap, ctx.tem_volume, ctx.tendencia_win, ctx.atr_atual, ctx.poc_atual)
+                        self.ultimo_sinal_enviado = sinal_db
+                        self.tempo_ultimo_sinal = agora
+
+                        if pode_abrir_ordem:
+                            self.gerenciar_ordens(sinal_db, ctx, msg_microestrutura)
+
+                # Salva auditoria no Banco de Dados
+                timestamp_db = estado["linha_atual"].name.strftime("%Y-%m-%d %H:%M:00")
+                log.info(f"WIN: {ctx.fechamento_win:.0f} | Termômetro: {ctx.termometro:.2f} | Decisão: {sinal_db}")
+                dados_bd = (
+                    timestamp_db, ctx.fechamento_win, estado["z_win"], estado["linha_atual"][f'Z_{TICKER_SP}'], 
+                    estado["linha_atual"][f'Z_{TICKER_DXY}'], estado["linha_atual"][f'Z_{TICKER_VIX}'], 
+                    ctx.termometro, sinal_db, ctx.vwap_atual, ctx.distancia_vwap, estado["vol_atual"], estado["vol_media"]
+                )
+                salvar_leitura(self.conn, dados_bd)
+
+                # 5. Renderização (Painel)
+                self.renderizar_tela(hora_atual, estado, sinal_txt, mensagem)
+
+                # 6. Gestão Ativa
+                if self.auto_trading_ativo and dentro_do_pregao:
+                    gerenciar_trailing_stop(TICKER_WIN, gatilho_pts=250, margem_seguranca=100, trailing_step=30)
+
+                # 7. Espera Inteligente
+                await self.aguardar_inteligente(estado, sinal_db, mensagem)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            task_teclado.cancel()
+
 
 if __name__ == "__main__":
-    main()
+    orquestrador = TradingOrchestrator()
+    try:
+        asyncio.run(orquestrador.run())
+    except KeyboardInterrupt:
+        log.info("Encerrando bot manualmente.")
+        print("\nSaindo...")

@@ -2,7 +2,7 @@ import MetaTrader5 as mt5
 from core.logger import log
 from core.config import cfg
 
-def gerenciar_trailing_stop(simbolo, gatilho_pts=250, margem_seguranca=100, trailing_step=30):
+def gerenciar_trailing_stop(simbolo: str, gatilho_pts: int = 250, margem_seguranca: int = 100, trailing_step: int = 30) -> None:
     """
     Vigia as posições abertas e move o Stop Loss a favor do trade para proteger os lucros.
     

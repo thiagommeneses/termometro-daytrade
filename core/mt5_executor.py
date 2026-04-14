@@ -1,8 +1,10 @@
 import MetaTrader5 as mt5
+from typing import Optional, Tuple
 from core.logger import log
 from core.config import cfg
+from core.models import OrderResult
 
-def executar_ordem(simbolo, tipo_sinal, lote, preco_atual, stop_loss_pts, take_profit_pts):
+def executar_ordem(simbolo: str, tipo_sinal: str, lote: float, preco_atual: float, stop_loss_pts: float, take_profit_pts: float) -> Optional[OrderResult]:
     """
     Envia uma ordem a mercado para o MT5 com Stop Loss e Take Profit calculados.
     Válido apenas para o pregão atual (ORDER_TIME_DAY).
@@ -64,15 +66,15 @@ def executar_ordem(simbolo, tipo_sinal, lote, preco_atual, stop_loss_pts, take_p
         
     log.info(f"✅ Ordem Executada com Sucesso! Ticket: {resultado.order}")
     
-    return {
-        "ticket": resultado.order,
-        "preco_executado": resultado.price,
-        "sl": sl,
-        "tp": tp,
-        "lote": lote
-    }
+    return OrderResult(
+        ticket=resultado.order,
+        preco_executado=resultado.price,
+        sl=sl,
+        tp=tp,
+        lote=lote
+    )
 
-def zerar_posicoes(simbolo):
+def zerar_posicoes(simbolo: str) -> Tuple[bool, str]:
     """
     Escaneia a conta em busca de posições abertas no ativo e executa a 
     liquidação a mercado (Zeragem Compulsória).

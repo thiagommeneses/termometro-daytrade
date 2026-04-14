@@ -4,8 +4,9 @@
 from datetime import datetime
 import pandas as pd
 import numpy as np
+from typing import Tuple, Optional
 
-def calcular_vwap_e_volume(df_full):
+def calcular_vwap_e_volume(df_full: pd.DataFrame) -> Tuple[float, float, float]:
     df = df_full.copy()
     df['Date'] = df.index.date
     df['Typical_Price'] = (df['high'] + df['low'] + df['close']) / 3
@@ -23,7 +24,17 @@ def calcular_vwap_e_volume(df_full):
     
     return vwap_atual, vol_atual, vol_media
 
-def calcular_zscore_e_termometro(df_win_close, df_vix, df_dxy, df_sp, ticker_win, ticker_sp, ticker_dxy, ticker_vix, periodo_z=20):
+def calcular_zscore_e_termometro(
+    df_win_close: pd.DataFrame, 
+    df_vix: pd.DataFrame, 
+    df_dxy: pd.DataFrame, 
+    df_sp: pd.DataFrame, 
+    ticker_win: str, 
+    ticker_sp: str, 
+    ticker_dxy: str, 
+    ticker_vix: str, 
+    periodo_z: int = 20
+) -> pd.DataFrame:
     df_final = df_win_close.join([df_vix, df_dxy, df_sp]).dropna()
     
     for ativo in [ticker_win, ticker_vix, ticker_dxy, ticker_sp]:
@@ -39,13 +50,13 @@ def calcular_zscore_e_termometro(df_win_close, df_vix, df_dxy, df_sp, ticker_win
     )
     return df_final
 
-def calcular_tendencia_60m(df_60m, ticker):
+def calcular_tendencia_60m(df_60m: pd.DataFrame, ticker: str) -> str:
     sma_60m = df_60m[ticker].rolling(window=20).mean().iloc[-1]
     return "ALTA" if df_60m.iloc[-1][ticker] > sma_60m else "BAIXA"
 
 # (Mantenha as funções que já existem lá e adicione estas no final)
 
-def calcular_dados_d1(df_m5):
+def calcular_dados_d1(df_m5: pd.DataFrame) -> Tuple[Optional[float], Optional[float]]:
     """Calcula o Fechamento e a VWAP exata do dia anterior (D-1) à prova de leilão"""
     df = df_m5.copy()
     df['Date'] = df.index.date
@@ -76,7 +87,7 @@ def calcular_dados_d1(df_m5):
 
     return fechamento_d1, vwap_d1
 
-def variacao_overnight(df_m5):
+def variacao_overnight(df_m5: pd.DataFrame) -> float:
     """Calcula a variação % do ativo global na madrugada"""
     df = df_m5.copy()
     df['Date'] = df.index.date
@@ -99,7 +110,7 @@ def variacao_overnight(df_m5):
     variacao_pct = ((preco_atual - fechamento_d1) / fechamento_d1) * 100
     return variacao_pct
 
-def calcular_atr(df_m5, periodo=14):
+def calcular_atr(df_m5: pd.DataFrame, periodo: int = 14) -> float:
     """Calcula o Average True Range (Volatilidade/Respiração do Mercado) para o Stop Loss"""
     df = df_m5.copy()
     df['Prev_Close'] = df['close'].shift(1)
@@ -114,7 +125,7 @@ def calcular_atr(df_m5, periodo=14):
     
     return df['ATR'].iloc[-1]
 
-def calcular_poc_intradiario(df_m5):
+def calcular_poc_intradiario(df_m5: pd.DataFrame) -> float:
     """Aproximação do Point of Control (POC): Onde houve mais volume no dia"""
     df = df_m5.copy()
     hoje = datetime.now().date()
@@ -130,7 +141,7 @@ def calcular_poc_intradiario(df_m5):
     
     return poc_price
 
-def calcular_correlacao_sp(df_win, df_sp, periodo=20):
+def calcular_correlacao_sp(df_win: pd.DataFrame, df_sp: pd.DataFrame, periodo: int = 20) -> float:
     """Calcula a Correlação de Pearson entre o Brasil e o S&P 500"""
     # Pega os nomes das colunas dinamicamente (evita hardcode de ticker)
     col_win = df_win.columns[0]

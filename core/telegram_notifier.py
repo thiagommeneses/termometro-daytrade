@@ -23,12 +23,12 @@ TITULOS_SINAIS = {
 }
 
 # Função para limpar códigos ANSI (cores e formatações) das mensagens antes de enviar para o Telegram, garantindo que o texto fique legível e sem caracteres estranhos. O Telegram não interpreta códigos ANSI, então é importante remover esses códigos para evitar mensagens confusas. Essa função utiliza uma expressão regular para identificar e eliminar os códigos ANSI presentes na mensagem bruta, resultando em um texto limpo e pronto para ser enviado ao Telegram.
-def limpar_ansi(texto):
+def limpar_ansi(texto: str) -> str:
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     return ansi_escape.sub('', texto)
 
 # Notificação principal para sinais e alertas, com foco em métricas de mercado e insights detalhados
-def notificar_telegram(tipo_alerta, sinal_db, mensagem_bruta, preco, termometro, dist_vwap, tem_volume, tendencia_60m, atr, poc):
+def notificar_telegram(tipo_alerta: str, sinal_db: str, mensagem_bruta: str, preco: float, termometro: float, dist_vwap: float, tem_volume: bool, tendencia_60m: str, atr: float, poc: float) -> None:
     mensagem_limpa = limpar_ansi(mensagem_bruta)
     hora = datetime.now().strftime("%H:%M")
     
@@ -78,7 +78,7 @@ def notificar_telegram(tipo_alerta, sinal_db, mensagem_bruta, preco, termometro,
 # Notificação específica para ordens executadas, com foco na ação e detalhes da operação
 # Essa função é chamada após a execução bem-sucedida de uma ordem, para informar rapidamente sobre a operação realizada.
 
-def notificar_execucao(acao, simbolo, preco, lote, sl, tp, motivo="Alinhamento Institucional"):
+def notificar_execucao(acao: str, simbolo: str, preco: float, lote: float, sl: float, tp: float, motivo: str = "Alinhamento Institucional") -> None:
     """Envia notificação curta focada apenas na execução da ordem"""
     hora = datetime.now().strftime("%H:%M:%S")
     icone = "🟢" if acao == "COMPRA" else "🔴"
