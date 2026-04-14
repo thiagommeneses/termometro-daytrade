@@ -18,6 +18,13 @@ def executar_ordem(simbolo: str, tipo_sinal: str, lote: float, preco_atual: floa
     lote = float(lote)
 
     # 2. Prepara as variáveis baseadas na direção
+    info = mt5.symbol_info(simbolo)
+    if not info:
+        log.error(f"Símbolo {simbolo} não localizado no terminal.")
+        return None
+        
+    tick_size = info.trade_tick_size if info.trade_tick_size > 0 else 1.0
+
     if tipo_sinal == "COMPRA":
         ordem_tipo = mt5.ORDER_TYPE_BUY
         sl = preco_atual - stop_loss_pts
@@ -31,6 +38,10 @@ def executar_ordem(simbolo: str, tipo_sinal: str, lote: float, preco_atual: floa
     else:
         log.warning(f"Sinal inválido para execução: {tipo_sinal}")
         return None
+
+    # Arredonda no tick_size (ex: 5 em 5 para o índice) para precisão da corretora
+    sl = float(round(sl / tick_size) * tick_size)
+    tp = float(round(tp / tick_size) * tick_size)
 
     # 3. Monta o dicionário da requisição (A Boleta do MT5)
     request = {

@@ -81,6 +81,9 @@ class TradingOrchestrator:
         df_sp  = puxar_dados(TICKER_SP, CAMINHO_ZERO, mt5.TIMEFRAME_M5, 600, skip_init_shutdown=True)
         df_sp_60m  = puxar_dados(TICKER_SP, CAMINHO_ZERO, mt5.TIMEFRAME_H1, 50, skip_init_shutdown=True)
         mt5.shutdown()
+
+        # Reconecta e mantém Aberto no terminal Genial para a engine realizar o envio de Ordens 
+        mt5.initialize(path=CAMINHO_GENIAL)
         
         if any(df is None for df in [df_win_full, df_vix, df_dxy, df_sp, df_win_60m, df_sp_60m, df_win_m1]):
             return None
