@@ -6,11 +6,12 @@ from datetime import datetime
 from core.mt5_feed import puxar_dados, CAMINHO_GENIAL, CAMINHO_ZERO
 from core.math_engine import calcular_dados_d1, variacao_overnight
 from strategies.analise_leilao import gerar_relatorio_abertura
+from core.config import cfg
 
-# Configurações
-TICKER_WIN = "WINJ26"
-TICKER_DXY = "USDX"
-TICKER_SP  = "US500"
+# Configurações (Centralizadas no .env)
+TICKER_WIN = cfg.TICKER_WIN
+TICKER_DXY = cfg.TICKER_DXY
+TICKER_SP  = cfg.TICKER_SP
 
 def limpar_tela():
     os.system('cls' if os.name == 'nt' else 'clear')

@@ -132,11 +132,15 @@ def calcular_poc_intradiario(df_m5):
 
 def calcular_correlacao_sp(df_win, df_sp, periodo=20):
     """Calcula a Correlação de Pearson entre o Brasil e o S&P 500"""
+    # Pega os nomes das colunas dinamicamente (evita hardcode de ticker)
+    col_win = df_win.columns[0]
+    col_sp = df_sp.columns[0]
+    
     # Junta os dois DataFrames pela hora exata
-    df_merged = pd.concat([df_win['WINJ26'], df_sp['US500']], axis=1).dropna()
+    df_merged = pd.concat([df_win[col_win], df_sp[col_sp]], axis=1).dropna()
     
     if len(df_merged) < periodo: 
         return 1.0 # Se não tiver dados suficientes, assume correlação positiva padrão
         
-    corr = df_merged['WINJ26'].rolling(window=periodo).corr(df_merged['US500']).iloc[-1]
+    corr = df_merged[col_win].rolling(window=periodo).corr(df_merged[col_sp]).iloc[-1]
     return corr

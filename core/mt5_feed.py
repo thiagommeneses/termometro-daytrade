@@ -3,10 +3,11 @@
 
 import MetaTrader5 as mt5
 import pandas as pd
+from core.config import cfg
 
-# Caminhos exatos das suas corretoras
-CAMINHO_GENIAL = r"C:\Program Files\MetaTrader 5\terminal64.exe"
-CAMINHO_ZERO = r"C:\Program Files\Zero Financial MT5 Terminal\terminal64.exe"
+# Caminhos das corretoras (Centralizados no .env)
+CAMINHO_GENIAL = cfg.MT5_PATH_GENIAL
+CAMINHO_ZERO = cfg.MT5_PATH_ZERO
 
 def puxar_dados(ticker, caminho_exe, tf, num_barras, completo=False):
     if not mt5.initialize(path=caminho_exe):

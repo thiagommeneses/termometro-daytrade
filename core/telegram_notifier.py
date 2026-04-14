@@ -2,9 +2,10 @@ import requests
 import re
 from datetime import datetime
 from core.logger import log
+from core.config import cfg
 
-TOKEN = "8568271144:AAEsglyZGDfOtxbHuEh2joW8J2eI-1V3SKY"
-CHAT_ID = "690559715"
+TOKEN = cfg.TELEGRAM_BOT_TOKEN
+CHAT_ID = cfg.TELEGRAM_CHAT_ID
 
 # Dicionário para traduzir o código do Banco de Dados para Títulos Premium
 TITULOS_SINAIS = {

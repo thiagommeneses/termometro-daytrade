@@ -26,15 +26,16 @@ import time
 import os
 import sqlite3
 from datetime import datetime
+from core.config import cfg
 
-# 1. Configurações de Diretórios e Tickers
-caminho_genial = r"C:\Program Files\MetaTrader 5\terminal64.exe"
-caminho_zero = r"C:\Program Files\Zero Financial MT5 Terminal\terminal64.exe"
+# 1. Configurações (Centralizadas no .env)
+caminho_genial = cfg.MT5_PATH_GENIAL
+caminho_zero = cfg.MT5_PATH_ZERO
 
-ticker_win = "WINJ26" 
-ticker_vix = "VIX"    
-ticker_dxy = "USDX"   
-ticker_sp  = "US500"  
+ticker_win = cfg.TICKER_WIN
+ticker_vix = cfg.TICKER_VIX
+ticker_dxy = cfg.TICKER_DXY
+ticker_sp  = cfg.TICKER_SP
 
 # Cores para o Terminal
 VERDE = '\033[92m'
@@ -47,7 +48,7 @@ RESET = '\033[0m'
 # =================================================================
 # INICIALIZAÇÃO DO BANCO DE DADOS (SQLITE)
 # =================================================================
-conn = sqlite3.connect('dados_mercado.db')
+conn = sqlite3.connect(cfg.DB_NAME)
 cursor = conn.cursor()
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS historico_termometro (

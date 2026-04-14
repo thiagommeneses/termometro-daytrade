@@ -1,11 +1,12 @@
 import MetaTrader5 as mt5
+from core.config import cfg
 
 def testar_conexao():
     if not mt5.initialize():
         print("❌ Falha ao inicializar o MetaTrader 5.")
         return
         
-    simbolo = "WINJ26"
+    simbolo = cfg.TICKER_WIN
     
     # NOVO: Força o MT5 a 'enxergar' e ativar o ativo no Market Watch
     if not mt5.symbol_select(simbolo, True):
@@ -29,7 +30,7 @@ def testar_conexao():
         "volume": 1.0,
         "type": mt5.ORDER_TYPE_BUY_LIMIT,
         "price": preco_longe,
-        "magic": 777,
+        "magic": cfg.MAGIC_NUMBER,
         "comment": "Ping Test IPC",
         # "type_time": mt5.ORDER_TIME_GTC,
         "type_time": mt5.ORDER_TIME_DAY,  # Ordem válida apenas para o dia, para evitar surpresas no dia seguinte

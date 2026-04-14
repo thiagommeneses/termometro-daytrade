@@ -24,17 +24,18 @@ from strategies.analise_pregao import analisar_cenario_avancado
 from strategies.microestrutura import analisar_fluxo_m1, confirmar_sequencial
 from core.macro_calendar import verificar_alerta_macro
 from core.logger import log
+from core.config import cfg
 
 # Ferramentas de Comunicação e Execução
 from core.telegram_notifier import notificar_telegram, notificar_execucao
 from core.mt5_executor import executar_ordem, zerar_posicoes
 from core.trade_manager import gerenciar_trailing_stop
 
-# Configurações de Ativos
-TICKER_WIN = "WINJ26"
-TICKER_VIX = "VIX"
-TICKER_DXY = "USDX"
-TICKER_SP  = "US500"
+# Configurações de Ativos (Centralizadas no .env)
+TICKER_WIN = cfg.TICKER_WIN
+TICKER_VIX = cfg.TICKER_VIX
+TICKER_DXY = cfg.TICKER_DXY
+TICKER_SP  = cfg.TICKER_SP
 
 # Cores para o Terminal (Deixa a leitura visual mais rápida)
 VERDE = '\033[92m'

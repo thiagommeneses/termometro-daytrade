@@ -1,5 +1,6 @@
 import MetaTrader5 as mt5
 from core.logger import log
+from core.config import cfg
 
 def executar_ordem(simbolo, tipo_sinal, lote, preco_atual, stop_loss_pts, take_profit_pts):
     """
@@ -39,7 +40,7 @@ def executar_ordem(simbolo, tipo_sinal, lote, preco_atual, stop_loss_pts, take_p
         "sl": sl,
         "tp": tp,
         "deviation": 10, 
-        "magic": 777,    
+        "magic": cfg.MAGIC_NUMBER,
         "comment": "Nemesis Quant",
         "type_time": mt5.ORDER_TIME_DAY, # <--- CORREÇÃO APLICADA AQUI (Validade Diária)
         "type_filling": mt5.ORDER_FILLING_RETURN,
@@ -100,7 +101,7 @@ def zerar_posicoes(simbolo):
             "position": pos.ticket, # <--- O SEGREDO: Referencia o ticket da ordem que está aberta
             "price": float(preco_mercado),
             "deviation": 20, # Derrapagem maior permitida por ser zeragem de segurança
-            "magic": 777,
+            "magic": cfg.MAGIC_NUMBER,
             "comment": "Zeragem Compulsoria",
             "type_time": mt5.ORDER_TIME_DAY,
             "type_filling": mt5.ORDER_FILLING_RETURN,

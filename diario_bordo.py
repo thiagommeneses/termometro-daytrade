@@ -17,6 +17,7 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 import os
+from core.config import cfg
 
 # Cores para o Terminal
 VERDE = '\033[92m'
@@ -30,7 +31,7 @@ def limpar_tela():
 
 def gerar_relatorio_fechamento():
     # Conecta no nosso "cofre" de dados
-    conn = sqlite3.connect('dados_mercado.db')
+    conn = sqlite3.connect(cfg.DB_NAME)
     
     # Puxa APENAS as leituras do pregão de hoje
     query = '''

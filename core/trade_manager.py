@@ -1,5 +1,6 @@
 import MetaTrader5 as mt5
 from core.logger import log
+from core.config import cfg
 
 def gerenciar_trailing_stop(simbolo, gatilho_pts=250, margem_seguranca=100, trailing_step=30):
     """
@@ -72,7 +73,7 @@ def gerenciar_trailing_stop(simbolo, gatilho_pts=250, margem_seguranca=100, trai
                 "sl": float(novo_sl),
                 "tp": float(tp_atual),
                 "position": ticket,
-                "magic": 777
+                "magic": cfg.MAGIC_NUMBER
             }
             
             resultado = mt5.order_send(request)

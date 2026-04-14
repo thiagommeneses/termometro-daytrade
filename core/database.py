@@ -3,8 +3,11 @@
 
 import sqlite3
 import pandas as pd
+from core.config import cfg
 
-def inicializar_banco(nome_arquivo='dados_mercado.db'):
+def inicializar_banco(nome_arquivo=None):
+    if nome_arquivo is None:
+        nome_arquivo = cfg.DB_NAME
     conn = sqlite3.connect(nome_arquivo)
     cursor = conn.cursor()
     
