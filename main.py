@@ -60,6 +60,8 @@ class TradingOrchestrator:
         self.lote_piloto = 1.0
         self.lote_maximo = 3.0
         self.flag_tecla_t = False
+        self.layout_mode = 1
+        self.forcar_render_hud = False
         
         log.info("=== SISTEMA QUANTITATIVO INICIADO ===")
         
@@ -205,51 +207,112 @@ class TradingOrchestrator:
         status_vwap = f"{VERDE}Preço Acima (Comprados no Controle){RESET}" if ctx.distancia_vwap > 0 else f"{VERMELHO}Preço Abaixo (Vendidos no Controle){RESET}"
         cor_win_60 = VERDE if ctx.tendencia_win == "ALTA" else VERMELHO
         cor_sp_60 = VERDE if ctx.tendencia_sp == "ALTA" else VERMELHO
-
-        limpar_tela()
-        print("="*65)
-        print(f"   TERMÔMETRO INSTITUCIONAL - MACRO + VWAP + 60M + VOLUME   ")
-        print("="*65)
-        print(f"Última Atualização: {hora_atual} | Ref. Candle: {estado['linha_atual'].name.strftime('%H:%M')}\n")
-        
-        print(f"► SINAL ATUAL: {sinal_txt}\n")
-        print(f"Pontuação Termômetro Global: {ctx.termometro:.2f}")
-        print("-" * 65)
-        
-        print(f"📊 FLUXO DE VOLUME (No Candle de 5M Atual):")
-        print(f"   Status do Lote: {cor_vol}{status_vol_txt}{RESET}")
-        print(f"   Vol. Atual: {estado['vol_atual']:.0f} | Vol. Médio: {estado['vol_media']:.0f}")
-        print("-" * 65)
-
-        print(f"🧲 GRAVIDADE INSTITUCIONAL (VWAP Diária):")
-        print(f"   VWAP Atual   : {ctx.vwap_atual:.0f}")
-        print(f"   Distância    : {ctx.distancia_vwap:+.0f} pontos -> {status_vwap}")
-        print("-" * 65)
-
-        print(f"🎯 POC Atual: {ctx.poc_atual:.0f} | 📏 ATR (Volatilidade): {ctx.atr_atual:.0f} pts | 🔗 Corr(WINxSP): {ctx.correlacao:.2f}")
-
-        print(f"🌊 FILTRO MACRO (Tendência 60 Minutos):")
-        print(f"   Maré Local (WIN)  : {cor_win_60}{ctx.tendencia_win}{RESET}")
-        print(f"   Maré Global (S&P) : {cor_sp_60}{ctx.tendencia_sp}{RESET}")
-        print("-" * 65)
-        
-        print(f"{AZUL}💡 ANÁLISE DO CENÁRIO:{RESET}")
-        print(f"   {mensagem}")
-        print("="*65)
-        
-        print("RAIO-X DOS ATIVOS (Z-Score no 5M):")
-        print(f"🇧🇷 WIN  : {estado['z_win']:>5.2f} (Cot: {ctx.fechamento_win:.0f})")
-        print(f"🇺🇸 S&P  : {estado['linha_atual'][f'Z_{TICKER_SP}']:>5.2f}")
-        print(f"💵 DXY  : {estado['linha_atual'][f'Z_{TICKER_DXY}']:>5.2f}")
-        print(f"😨 VIX  : {estado['linha_atual'][f'Z_{TICKER_VIX}']:>5.2f}")
-        print("="*65)
-                
         status_cor = VERDE if self.auto_trading_ativo else VERMELHO
         status_texto = "LIGADO" if self.auto_trading_ativo else "DESLIGADO"
-        print("="*75)
-        print(f"🤖 AUTO-TRADING: {status_cor}{status_texto}{RESET} (Pressione 'A' para alternar)")
-        print("="*75)
-        print("Aguardando 10 segundos... (Teclas: 'T' = Telegram | 'A' = Ligar/Desl Auto-Trading)")
+
+        limpar_tela()
+
+        if self.layout_mode == 1:
+            print("="*65)
+            print(f"   TERMÔMETRO INSTITUCIONAL - MACRO + VWAP + 60M + VOLUME   ")
+            print("="*65)
+            print(f"Última Atualização: {hora_atual} | Ref. Candle: {estado['linha_atual'].name.strftime('%H:%M')}\n")
+            
+            print(f"► SINAL ATUAL: {sinal_txt}\n")
+            print(f"Pontuação Termômetro Global: {ctx.termometro:.2f}")
+            print("-" * 65)
+            
+            print(f"📊 FLUXO DE VOLUME (No Candle de 5M Atual):")
+            print(f"   Status do Lote: {cor_vol}{status_vol_txt}{RESET}")
+            print(f"   Vol. Atual: {estado['vol_atual']:.0f} | Vol. Médio: {estado['vol_media']:.0f}")
+            print("-" * 65)
+
+            print(f"🧲 GRAVIDADE INSTITUCIONAL (VWAP Diária):")
+            print(f"   VWAP Atual   : {ctx.vwap_atual:.0f}")
+            print(f"   Distância    : {ctx.distancia_vwap:+.0f} pontos -> {status_vwap}")
+            print("-" * 65)
+
+            print(f"🎯 POC Atual: {ctx.poc_atual:.0f} | 📏 ATR (Volatilidade): {ctx.atr_atual:.0f} pts | 🔗 Corr(WINxSP): {ctx.correlacao:.2f}")
+
+            print(f"🌊 FILTRO MACRO (Tendência 60 Minutos):")
+            print(f"   Maré Local (WIN)  : {cor_win_60}{ctx.tendencia_win}{RESET}")
+            print(f"   Maré Global (S&P) : {cor_sp_60}{ctx.tendencia_sp}{RESET}")
+            print("-" * 65)
+            
+            print(f"{AZUL}💡 ANÁLISE DO CENÁRIO:{RESET}")
+            print(f"   {mensagem}")
+            print("="*65)
+            
+            print("RAIO-X DOS ATIVOS (Z-Score no 5M):")
+            print(f"🇧🇷 WIN  : {estado['z_win']:>5.2f} (Cot: {ctx.fechamento_win:.0f})")
+            print(f"🇺🇸 S&P  : {estado['linha_atual'][f'Z_{TICKER_SP}']:>5.2f}")
+            print(f"💵 DXY  : {estado['linha_atual'][f'Z_{TICKER_DXY}']:>5.2f}")
+            print(f"😨 VIX  : {estado['linha_atual'][f'Z_{TICKER_VIX}']:>5.2f}")
+            print("="*65)
+                    
+            print("="*75)
+            print(f"🤖 AUTO-TRADING: {status_cor}{status_texto}{RESET} (Pressione 'A' para alternar)")
+            print("="*75)
+        elif self.layout_mode == 2:
+            cor_vwap_hud = VERDE if ctx.distancia_vwap > 0 else AMARELO if ctx.distancia_vwap == 0 else VERMELHO
+            quem_lidera = "Compradores Liderando" if ctx.distancia_vwap > 0 else "Vendidos Liderando"
+            sinal_split = sinal_txt
+            print("▀" * 68)
+            print(f" [{hora_atual}] TERMINAL QUANTITATIVO NEMESIS           Ativo: {TICKER_WIN}")
+            print(f" Cotação: {ctx.fechamento_win:.0f} (M5)                         P&L  : R$ 0,00 (Dev)")
+            print("▄" * 68)
+            print("")
+            print("  STATUS DA MÁQUINA")
+            print(f"  Sinal do Motor   : {sinal_split:<30} [Score: {ctx.termometro:+.2f}]")
+            print(f"  Robô             : {status_cor}{status_texto}{RESET}")
+            print("")
+            print("── ESTRUTURA INSTITUCIONAL (M5) ────────────────────────────────────")
+            print(f"  VWAP Diária      : {ctx.vwap_atual:.0f} (Dist: {cor_vwap_hud}{ctx.distancia_vwap:+.0f}{RESET} pts) ▹ {quem_lidera}")
+            print(f"  POC Diária       : {ctx.poc_atual:.0f}")
+            print(f"  Volume Atual     : {estado['vol_atual']/1000:.1f}k / {estado['vol_media']/1000:.1f}k ({'Forte' if ctx.tem_volume else 'Oco'})")
+            print("")
+            print("── MATRIZ DE RISCO MACRO (M60) ─────────────────────────────────────")
+            print(f"  Tendências       : WIN [{cor_win_60}{ctx.tendencia_win}{RESET}] | S&P [{cor_sp_60}{ctx.tendencia_sp}{RESET}]")
+            print(f"  Volatilidade     : {ctx.atr_atual:.0f} pts (ATR)")
+            print(f"  Correlação SP    : {ctx.correlacao:.2f}")
+            print("")
+            print("── DESVIOS GLOBAIS (Z-SCORE M5) ────────────────────────────────────")
+            print(f"  🇧🇷 WIN: {estado['z_win']:>+5.2f}    | 🇺🇸 S&P: {estado['linha_atual'][f'Z_{TICKER_SP}']:>+5.2f}    | 💵 DXY: {estado['linha_atual'][f'Z_{TICKER_DXY}']:>+5.2f}   | 😨 VIX: {estado['linha_atual'][f'Z_{TICKER_VIX}']:>+5.2f}")
+            print("")
+            print("▄" * 68)
+            print(f" > DIRETRIZ: {mensagem}")
+        elif self.layout_mode == 3:
+            # V3 - Heavy Boxed Mode (Opção Institucional 1)
+            cor_vwap_hud = VERDE if ctx.distancia_vwap > 0 else AMARELO if ctx.distancia_vwap == 0 else VERMELHO
+            quem_lidera = "COMPRADORES no controle" if ctx.distancia_vwap > 0 else "VENDEDORES no controle"
+            
+            print("╔" + "═"*74 + "╗")
+            print(f"║ 🏦 TERMINAL INSTITUCIONAL NEMESIS                       [ {hora_atual} ] ")
+            print(f"║  ATIVO: {TICKER_WIN:<10} |  COTAÇÃO: {ctx.fechamento_win:<8.0f} |  P&L: R$ 0,00         ")
+            print("╠" + "═"*74 + "╣")
+            print(f"║ [ MOTOR PRINCIPAL ] STATUS: {status_cor}{status_texto}{RESET}")
+            print(f"║  SINAL DE EXECUÇÃO: {sinal_txt}")
+            print(f"║  SCORE DO ALGORITMO: {ctx.termometro:+.2f}")
+            print("╠" + "═"*74 + "╣")
+            print("║ [ ESTRUTURA DE FLUXO - M5 ]")
+            print(f"║  VWAP DIÁRIA    : {ctx.vwap_atual:.0f} (DIST: {cor_vwap_hud}{ctx.distancia_vwap:+.0f} pts{RESET}) -> {quem_lidera}")
+            print(f"║  POC INTRADAY   : {ctx.poc_atual:.0f}")
+            print(f"║  VOLUME ACUM.   : {estado['vol_atual']/1000:.1f}k / Média: {estado['vol_media']/1000:.1f}k ({'FORTE' if ctx.tem_volume else 'OCO'})")
+            print("╠" + "═"*74 + "╣")
+            print("║ [ MATRIZ MACRO E RISCO - M60 ]")
+            print(f"║  TENDÊNCIAS     : WIN [{cor_win_60}{ctx.tendencia_win}{RESET}] | S&P [{cor_sp_60}{ctx.tendencia_sp}{RESET}]")
+            print(f"║  VOLATILIDADE   : {ctx.atr_atual:.0f} pts (ATR Diário)")
+            print(f"║  CORRELAÇÃO S&P : {ctx.correlacao:.2f}")
+            print("╠" + "═"*74 + "╣")
+            print("║ [ RADAR DE DESVIOS - Z-SCORE M5 ]")
+            print(f"║  🇧🇷 WIN: {estado['z_win']:>+5.2f}  |  🇺🇸 S&P: {estado['linha_atual'][f'Z_{TICKER_SP}']:>+5.2f}  |  💵 DXY: {estado['linha_atual'][f'Z_{TICKER_DXY}']:>+5.2f}  |  😨 VIX: {estado['linha_atual'][f'Z_{TICKER_VIX}']:>+5.2f}")
+            print("╠" + "═"*74 + "╣")
+            print(f"║ DIRETRIZ ESTRATÉGICA:")
+            print(f"║ >> {mensagem}")
+            print("╚" + "═"*74 + "╝")
+
+        print("\nAguardando 10 segundos... (Teclas: [T]elegram | [A]uto-Trading | [V]isão)")
+
 
     async def escutar_teclado(self):
         """Task rodando em background para capturar inputs de teclado de forma assíncrona"""
@@ -263,16 +326,25 @@ class TradingOrchestrator:
                     self.auto_trading_ativo = not self.auto_trading_ativo
                     estado_log = "ATIVADO" if self.auto_trading_ativo else "DESATIVADO"
                     log.info(f"Comando manual: Auto-Trading {estado_log} pelo usuário.")
+                    self.forcar_render_hud = True
+                elif tecla == 'v':
+                    self.layout_mode = self.layout_mode + 1 if self.layout_mode < 3 else 1
+                    log.info(f"Layout alterado para V{self.layout_mode}.")
+                    self.forcar_render_hud = True
                 
                 while msvcrt.kbhit(): msvcrt.getch()
             
             await asyncio.sleep(0.1)
 
-    async def aguardar_inteligente(self, analise: dict, sinal_db: str, mensagem: str):
+    async def aguardar_inteligente(self, hora_atual: str, estado: dict, sinal_db: str, sinal_txt: str, mensagem: str):
         espera_segundos = 10
-        ctx = analise["ctx"]
+        ctx = estado["ctx"]
         
         for _ in range(int(espera_segundos / 0.1)):
+            if self.forcar_render_hud:
+                self.renderizar_tela(hora_atual, estado, sinal_txt, mensagem)
+                self.forcar_render_hud = False
+                
             if self.flag_tecla_t:
                 print(f"\n{MAGENTA}🚀 [HOTKEY] Tecla 'T' acionada! Disparando envio manual...{RESET}")
                 notificar_telegram("VALIDAÇÃO MANUAL", sinal_db, mensagem, 
@@ -366,21 +438,37 @@ class TradingOrchestrator:
                 if not ctx.alerta_macro:
                     self.ultimo_alerta_enviado = ""
 
-                sinais_alerta = ["COMPRA", "VENDA", "DESCOLAMENTO_MACRO", "BLOQUEIO_ELASTICO", "COMPRA BLOQUEADA", "VENDA BLOQUEADA", "OPERAÇÃO BLOQUEADA"]
-                sinais_operacionais = ["COMPRA", "VENDA"] 
+                sinais_operacionais = ["COMPRA", "VENDA"]
+                sinais_alerta_macro = ["DESCOLAMENTO_MACRO", "BLOQUEIO_ELASTICO"]
+                
                 agora = time.time()
                 
-                if sinal_db in sinais_alerta and dentro_do_pregao:
-                    mudou_status = (sinal_db != self.ultimo_sinal_enviado)
-                    passou_cooldown = (agora - self.tempo_ultimo_sinal) > (self.cooldown_minutos * 60)
-                    deve_notificar = mudou_status or (sinal_db in sinais_operacionais and passou_cooldown)
+                if dentro_do_pregao:
+                    deve_notificar = False
+                    titulo_notificacao = "SINAL"
+                    
+                    passou_cooldown_curto = (agora - self.tempo_ultimo_sinal) > (self.cooldown_minutos * 60)
+                    passou_cooldown_longo = (agora - self.tempo_ultimo_sinal) > (30 * 60)
+                    
+                    # Ignorar completamente os sinais que contêm "BLOQUEADA" no Telegram
+                    if sinal_db in sinais_operacionais:
+                        mudou_direcao = (sinal_db != self.ultimo_sinal_enviado)
+                        deve_notificar = mudou_direcao or passou_cooldown_curto
+                        
+                    elif sinal_db in sinais_alerta_macro:
+                        if passou_cooldown_longo:
+                            deve_notificar = True
+                            titulo_notificacao = "ALERTA CONDICIONAL"
                     
                     if deve_notificar:
-                        notificar_telegram("SINAL", sinal_txt, mensagem, ctx.fechamento_win, ctx.termometro, ctx.distancia_vwap, ctx.tem_volume, ctx.tendencia_win, ctx.atr_atual, ctx.poc_atual)
+                        notificar_telegram(titulo_notificacao, sinal_txt, mensagem, ctx.fechamento_win, ctx.termometro, ctx.distancia_vwap, ctx.tem_volume, ctx.tendencia_win, ctx.atr_atual, ctx.poc_atual)
                         self.ultimo_sinal_enviado = sinal_db
                         self.tempo_ultimo_sinal = agora
 
-                        if pode_abrir_ordem:
+                    # O Motor de Execução acompanha o trigger Operacional contínuo
+                    if sinal_db in sinais_operacionais and pode_abrir_ordem:
+                        # Só envia ordens se for um pulso contundente aprovado 
+                        if deve_notificar: 
                             self.gerenciar_ordens(sinal_db, ctx, msg_microestrutura)
 
                 # Salva auditoria no Banco de Dados
@@ -401,7 +489,7 @@ class TradingOrchestrator:
                     gerenciar_trailing_stop(TICKER_WIN, gatilho_pts=250, margem_seguranca=100, trailing_step=30)
 
                 # 7. Espera Inteligente
-                await self.aguardar_inteligente(estado, sinal_db, mensagem)
+                await self.aguardar_inteligente(hora_atual, estado, sinal_db, sinal_txt, mensagem)
         except asyncio.CancelledError:
             pass
         finally:

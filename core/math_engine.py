@@ -18,9 +18,9 @@ def calcular_vwap_e_volume(df_full: pd.DataFrame) -> Tuple[float, float, float]:
 
     df['Vol_SMA20'] = df['tick_volume'].rolling(window=20).mean()
 
-    vwap_atual = df['VWAP'].iloc[-1]
-    vol_atual = df['tick_volume'].iloc[-1]
-    vol_media = df['Vol_SMA20'].iloc[-1]
+    vwap_atual = float(df['VWAP'].iloc[-1])
+    vol_atual = float(df['tick_volume'].iloc[-1])
+    vol_media = float(df['Vol_SMA20'].iloc[-1])
     
     return vwap_atual, vol_atual, vol_media
 

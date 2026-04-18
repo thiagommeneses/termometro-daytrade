@@ -133,8 +133,8 @@ while True:
     fechamento_win = df_win_full['close'].iloc[-1]
     distancia_vwap = fechamento_win - vwap_atual
     
-    vol_atual = df_win_full['tick_volume'].iloc[-1]
-    vol_media = df_win_full['Vol_SMA20'].iloc[-1]
+    vol_atual = float(df_win_full['tick_volume'].iloc[-1])
+    vol_media = float(df_win_full['Vol_SMA20'].iloc[-1])
     tem_volume = vol_atual > vol_media
 
     # =================================================================
