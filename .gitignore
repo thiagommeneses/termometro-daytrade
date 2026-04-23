@@ -33,3 +33,8 @@ temp/
 .skills/
 .agents/
 .agent/
+
+# Arquivos de dados
+*.db
+*.db-journal
+*.db-wal
